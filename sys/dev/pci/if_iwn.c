@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_iwn.c,v 1.229 2020/05/05 09:41:33 stsp Exp $	*/
+/*	$OpenBSD: if_iwn.c,v 1.233 2020/06/11 11:27:44 stsp Exp $	*/
 
 /*-
  * Copyright (c) 2007-2010 Damien Bergamini <damien.bergamini@free.fr>
@@ -1920,7 +1920,7 @@ iwn_ccmp_decap(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	hdrlen = ieee80211_get_hdrlen(wh);
 	ivp = (uint8_t *)wh + hdrlen;
 
-	/* Check that ExtIV bit is be set. */
+	/* Check that ExtIV bit is set. */
 	if (!(ivp[3] & IEEE80211_WEP_EXTIV)) {
 		DPRINTF(("CCMP decap ExtIV not set\n"));
 		return 1;
@@ -1938,47 +1938,13 @@ iwn_ccmp_decap(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	     (uint64_t)ivp[6] << 32 |
 	     (uint64_t)ivp[7] << 40;
 	if (pn <= *prsc) {
-		if (hasqos && ba->ba_state == IEEE80211_BA_AGREED) {
-			/*
-			 * This is an A-MPDU subframe.
-			 * Such frames may be received out of order due to
-			 * legitimate retransmissions of failed subframes
-			 * in previous A-MPDUs. Duplicates will be handled
-			 * in ieee80211_inputm() as part of A-MPDU reordering.
-			 */
-		} else if (ieee80211_has_seq(wh)) {
-			/*
-			 * Not necessarily a replayed frame since we did not
-			 * check the sequence number of the 802.11 header yet.
-			 */
-			int nrxseq, orxseq;
-
-			nrxseq = letoh16(*(u_int16_t *)wh->i_seq) >>
-			    IEEE80211_SEQ_SEQ_SHIFT;
-			if (hasqos)
-				orxseq = ni->ni_qos_rxseqs[tid];
-			else
-				orxseq = ni->ni_rxseq;
-			if (nrxseq < orxseq) {
-				DPRINTF(("CCMP replayed (n=%d < o=%d)\n",
-				    nrxseq, orxseq));
-				ic->ic_stats.is_ccmp_replays++;
-				return 1;
-			}
-		} else {
-			DPRINTF(("CCMP replayed\n"));
-			ic->ic_stats.is_ccmp_replays++;
-			return 1;
-		}
+		DPRINTF(("CCMP replayed\n"));
+		ic->ic_stats.is_ccmp_replays++;
+		return 1;
 	}
-	/* Update last seen packet number. */
-	*prsc = pn;
+	/* Last seen packet number is updated in ieee80211_inputm(). */
 
-	/* Clear Protected bit and strip IV. */
-	wh->i_fc[1] &= ~IEEE80211_FC1_PROTECTED;
-	memmove(mtod(m, caddr_t) + IEEE80211_CCMP_HDRLEN, wh, hdrlen);
-	m_adj(m, IEEE80211_CCMP_HDRLEN);
-	/* Strip MIC. */
+	/* Strip MIC. IV will be stripped by ieee80211_inputm(). */
 	m_adj(m, -IEEE80211_CCMP_MICLEN);
 	return 0;
 }
@@ -2162,6 +2128,7 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 			ic->ic_stats.is_ccmp_dec_errs++;
 			ifp->if_ierrors++;
 			m_freem(m);
+			ieee80211_release_node(ic, ni);
 			return;
 		}
 		/* Check whether decryption was successful or not. */
@@ -2174,11 +2141,13 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 			ic->ic_stats.is_ccmp_dec_errs++;
 			ifp->if_ierrors++;
 			m_freem(m);
+			ieee80211_release_node(ic, ni);
 			return;
 		}
 		if (iwn_ccmp_decap(sc, m, ni) != 0) {
 			ifp->if_ierrors++;
 			m_freem(m);
+			ieee80211_release_node(ic, ni);
 			return;
 		}
 		rxi.rxi_flags |= IEEE80211_RXI_HWDEC;
@@ -5221,7 +5190,6 @@ iwn_scan(struct iwn_softc *sc, uint16_t flags, int bgscan)
 	struct ieee80211_frame *wh;
 	struct ieee80211_rateset *rs;
 	struct ieee80211_channel *c;
-	struct ifnet *ifp = &ic->ic_if;
 	uint8_t *buf, *frm;
 	uint16_t rxchain, dwell_active, dwell_passive;
 	uint8_t txant;
@@ -5325,7 +5293,6 @@ iwn_scan(struct iwn_softc *sc, uint16_t flags, int bgscan)
 	wh->i_fc[0] = IEEE80211_FC0_VERSION_0 | IEEE80211_FC0_TYPE_MGT |
 	    IEEE80211_FC0_SUBTYPE_PROBE_REQ;
 	wh->i_fc[1] = IEEE80211_FC1_DIR_NODS;
-	IEEE80211_ADDR_COPY(ic->ic_myaddr, LLADDR(ifp->if_sadl));
 	IEEE80211_ADDR_COPY(wh->i_addr1, etherbroadcastaddr);
 	IEEE80211_ADDR_COPY(wh->i_addr2, ic->ic_myaddr);
 	IEEE80211_ADDR_COPY(wh->i_addr3, etherbroadcastaddr);
