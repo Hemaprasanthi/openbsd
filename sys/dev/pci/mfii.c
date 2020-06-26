@@ -1,4 +1,4 @@
-/* $OpenBSD: mfii.c,v 1.68 2020/03/21 20:42:23 krw Exp $ */
+/* $OpenBSD: mfii.c,v 1.71 2020/06/24 22:03:41 cheloha Exp $ */
 
 /*
  * Copyright (c) 2012 David Gwynne <dlg@openbsd.org>
@@ -784,7 +784,7 @@ mfii_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_link.openings = sc->sc_max_cmds;
 	sc->sc_link.adapter_softc = sc;
 	sc->sc_link.adapter = &mfii_switch;
-	sc->sc_link.adapter_target = sc->sc_info.mci_max_lds;
+	sc->sc_link.adapter_target = SDEV_NO_ADAPTER_TARGET;
 	sc->sc_link.adapter_buswidth = sc->sc_info.mci_max_lds;
 	sc->sc_link.pool = &sc->sc_iopool;
 
@@ -921,7 +921,7 @@ mfii_syspd(struct mfii_softc *sc)
 	link->adapter = &mfii_pd_switch;
 	link->adapter_softc = sc;
 	link->adapter_buswidth = MFI_MAX_PD;
-	link->adapter_target = -1;
+	link->adapter_target = SDEV_NO_ADAPTER_TARGET;
 	link->openings = sc->sc_max_cmds - 1;
 	link->pool = &sc->sc_iopool;
 
@@ -1966,7 +1966,7 @@ mfii_initialise_firmware(struct mfii_softc *sc)
 	htolem32(&iiq->system_request_frame_base_address_hi,
 	    MFII_DMA_DVA(sc->sc_requests) >> 32);
 
-	iiq->timestamp = htole64(time_uptime);
+	iiq->timestamp = htole64(getuptime());
 
 	ccb = scsi_io_get(&sc->sc_iopool, SCSI_NOSLEEP);
 	if (ccb == NULL) {

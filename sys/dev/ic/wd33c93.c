@@ -1,4 +1,4 @@
-/*	$OpenBSD: wd33c93.c,v 1.11 2020/04/15 02:18:39 cheloha Exp $	*/
+/*	$OpenBSD: wd33c93.c,v 1.13 2020/06/24 22:03:41 cheloha Exp $	*/
 /*	$NetBSD: wd33c93.c,v 1.24 2010/11/13 13:52:02 uebayasi Exp $	*/
 
 /*
@@ -187,7 +187,7 @@ wd33c93_attach(struct wd33c93_softc *sc, struct scsi_adapter *adapter)
 	sc->sc_cfflags = sc->sc_dev.dv_cfdata->cf_flags;
 	timeout_set(&sc->sc_watchdog, wd33c93_watchdog, sc);
 	wd33c93_init(sc);
-	
+
 	printf(": %s, %d.%d MHz, %s\n",
 	    wd33c93_chip_names[sc->sc_chip],
 	    sc->sc_clkfreq / 10, sc->sc_clkfreq % 10,
@@ -678,7 +678,7 @@ wd33c93_sched(struct wd33c93_softc *sc)
 			if (lun < SBIC_NLUN)
 				ti->lun[lun] = li;
 		}
-		li->last_used = time_uptime;
+		li->last_used = getuptime();
 
 		/*
 		 * We've found a potential command, but is the target/lun busy?
@@ -2284,7 +2284,7 @@ wd33c93_watchdog(void *arg)
 	struct wd33c93_linfo *li;
 	int t, s, l;
 	/* scrub LUN's that have not been used in the last 10min. */
-	time_t old = time_uptime - (10 * 60);
+	time_t old = getuptime() - (10 * 60);
 
 	for (t = 0; t < SBIC_NTARG; t++) {
 		ti = &sc->sc_tinfo[t];

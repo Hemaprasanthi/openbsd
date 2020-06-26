@@ -1,4 +1,4 @@
-/* $OpenBSD: machine.c,v 1.102 2020/01/06 20:05:10 zhuk Exp $	 */
+/* $OpenBSD: machine.c,v 1.105 2020/06/25 20:38:41 kn Exp $	 */
 
 /*-
  * Copyright (c) 1994 Thorsten Lockert <tholo@sigmasoft.com>
@@ -64,7 +64,6 @@ static char	**get_proc_args(struct kinfo_proc *);
 
 struct handle {
 	struct kinfo_proc **next_proc;	/* points to next valid proc pointer */
-	int		remaining;	/* number of pointers remaining */
 };
 
 /* what we consider to be process size: */
@@ -83,11 +82,6 @@ static char header[] =
 	"%5d %-8.8s %3d %4d %5s %5s %-9s %-7.7s %6s %5.2f%% %s"
 
 /* process state names for the "STATE" column of the display */
-/*
- * the extra nulls in the string "run" are for adding a slash and the
- * processor number when needed
- */
-
 char	*state_abbrev[] = {
 	"", "start", "run", "sleep", "stop", "zomb", "dead", "onproc"
 };
@@ -491,17 +485,13 @@ get_process_info(struct system_info *si, struct process_select *sel,
 		}
 	}
 
-	/* if requested, sort the "interesting" processes */
-	if (compare != NULL)
-		qsort((char *) pref, active_procs,
-		    sizeof(struct kinfo_proc *), compare);
+	qsort((char *)pref, active_procs, sizeof(struct kinfo_proc *), compare);
 	/* remember active and total counts */
 	si->p_total = total_procs;
 	si->p_active = pref_len = active_procs;
 
 	/* pass back a handle */
 	handle.next_proc = pref;
-	handle.remaining = active_procs;
 	return &handle;
 }
 
@@ -547,11 +537,9 @@ format_comm(struct kinfo_proc *kp)
 }
 
 void
-skip_next_process(struct handle *hndl)
+skip_processes(struct handle *hndl, int n)
 {
-	/* find and remember the next proc structure */
-	hndl->next_proc++;
-	hndl->remaining--;
+	hndl->next_proc += n;
 }
 
 char *
@@ -566,7 +554,6 @@ format_next_process(struct handle *hndl, const char *(*get_userid)(uid_t, int),
 
 	/* find and remember the next proc structure */
 	pp = *(hndl->next_proc++);
-	hndl->remaining--;
 
 	cputime = pp->p_rtime_sec + ((pp->p_rtime_usec + 500000) / 1000000);
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.h,v 1.4 2020/06/17 18:58:55 kettenis Exp $	*/
+/*	$OpenBSD: pmap.h,v 1.8 2020/06/25 17:36:08 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -19,6 +19,8 @@
 #ifndef _MACHINE_PMAP_H_
 #define _MACHINE_PMAP_H_
 
+#include <machine/pte.h>
+
 /* V->P mapping data */
 #define VP_IDX1_CNT	256
 #define VP_IDX1_MASK	(VP_IDX1_CNT - 1)
@@ -32,6 +34,7 @@ struct pmap {
 	int			pm_refs;
 	struct pmap_statistics	pm_stats;
 	struct mutex		pm_mtx;
+	struct slb		pm_slb[32];
 };
 
 typedef struct pmap *pmap_t;
@@ -71,6 +74,12 @@ extern struct pmap kernel_pmap_store;
 #define pmap_update(pm)
 
 void	pmap_bootstrap(void);
+
+struct slb_desc *pmap_slbd_lookup(pmap_t, vaddr_t);
+void	pmap_slbd_cache(pmap_t, struct slb_desc *);
+
+int	pmap_set_user_slb(pmap_t, vaddr_t);
+void	pmap_unset_user_slb(void);
 
 #ifdef DDB
 struct pte;

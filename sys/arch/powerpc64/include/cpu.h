@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.12 2020/06/14 20:15:09 kettenis Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.16 2020/06/22 16:58:20 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -35,6 +35,7 @@
 #include <machine/frame.h>
 #include <machine/intr.h>
 #include <machine/psl.h>
+#include <machine/pte.h>
 
 #include <sys/device.h>
 #include <sys/sched.h>
@@ -45,6 +46,10 @@ struct cpu_info {
 	struct schedstate_percpu ci_schedstate;
 
 	struct proc	*ci_curproc;
+	struct pcb	*ci_curpcb;
+
+	struct slb	ci_kernel_slb[32];
+	paddr_t		ci_user_slb_pa;
 
 #define CPUSAVE_LEN	9
 	register_t	ci_tempsave[CPUSAVE_LEN];
@@ -90,6 +95,8 @@ register struct cpu_info *__curcpu asm("r13");
 #define CPU_BUSY_CYCLE()	do {} while (0)
 #define signotify(p)		setsoftast()
 
+#define curpcb			curcpu()->ci_curpcb
+
 static inline unsigned int
 cpu_rnd_messybits(void)
 {
@@ -107,8 +114,8 @@ void delay(u_int);
 
 #define setsoftast()		aston(curcpu()->ci_curproc)
 
-#define PROC_STACK(p)		0
-#define PROC_PC(p)		0
+#define PROC_STACK(p)		((p)->p_md.md_regs->fixreg[1])
+#define PROC_PC(p)		((p)->p_md.md_regs->srr0)
 
 void	proc_trampoline(void);
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: machdep.c,v 1.24 2020/06/14 20:15:09 kettenis Exp $	*/
+/*	$OpenBSD: machdep.c,v 1.31 2020/06/26 08:57:20 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -17,16 +17,21 @@
  */
 
 #include <sys/param.h>
-#include <sys/systm.h>
 #include <sys/buf.h>
 #include <sys/exec.h>
 #include <sys/exec_elf.h>
+#include <sys/mount.h>
 #include <sys/msgbuf.h>
 #include <sys/proc.h>
 #include <sys/reboot.h>
+#include <sys/signalvar.h>
+#include <sys/syscallargs.h>
+#include <sys/systm.h>
+#include <sys/user.h>
 
 #include <machine/cpufunc.h>
 #include <machine/opal.h>
+#include <machine/pcb.h>
 #include <machine/psl.h>
 #include <machine/trap.h>
 
@@ -145,7 +150,7 @@ init_powernv(void *fdt, void *tocbase)
 
 	/* We're now ready to take traps. */
 	msr = mfmsr();
-	mtmsr(msr | PSL_RI);
+	mtmsr(msr | (PSL_ME|PSL_RI));
 
 #define LPCR_LPES	0x0000000000000008UL
 #define LPCR_HVICE	0x0000000000000002UL
@@ -226,6 +231,8 @@ init_powernv(void *fdt, void *tocbase)
 	initmsgbuf((caddr_t)uvm_pageboot_alloc(MSGBUFSIZE), MSGBUFSIZE);
 
 	proc0paddr = (struct user *)initstack;
+	proc0.p_addr = proc0paddr;
+	curpcb = &proc0.p_addr->u_pcb;
 	uspace = (register_t)proc0paddr + USPACE - FRAMELEN;
 	proc0.p_md.md_regs = (struct trapframe *)uspace;
 }
@@ -397,45 +404,102 @@ struct consdev opal_consdev = {
 struct consdev *cn_tab = &opal_consdev;
 
 int
-copyin(const void *src, void *dst, size_t size)
+kcopy(const void *kfaddr, void *kdaddr, size_t len)
 {
-	printf("%s\n", __func__);
-	return EFAULT;
+	memcpy(kdaddr, kfaddr, len);
+	return 0;
 }
 
 int
-copyout(const void *src, void *dst, size_t size)
+copyin(const void *uaddr, void *kaddr, size_t len)
 {
-	printf("%s\n", __func__);
-	return EFAULT;
+	pmap_t pm = curproc->p_p->ps_vmspace->vm_map.pmap;
+	int error;
+
+	error = pmap_set_user_slb(pm, (vaddr_t)uaddr);
+	if (error)
+		return error;
+
+	curpcb->pcb_onfault = (caddr_t)1;
+	error = kcopy(uaddr, kaddr, len);
+	curpcb->pcb_onfault = NULL;
+
+	pmap_unset_user_slb();
+	return error;
 }
 
 int
-copystr(const void *src, void *dst, size_t len, size_t *lenp)
+copyout(const void *kaddr, void *uaddr, size_t len)
 {
-	printf("%s\n", __func__);
-	return EFAULT;
+	pmap_t pm = curproc->p_p->ps_vmspace->vm_map.pmap;
+	int error;
+
+	error = pmap_set_user_slb(pm, (vaddr_t)uaddr);
+	if (error)
+		return error;
+
+	curpcb->pcb_onfault = (caddr_t)1;
+	error = kcopy(kaddr, uaddr, len);
+	curpcb->pcb_onfault = NULL;
+
+	pmap_unset_user_slb();
+	return error;
 }
 
 int
-copyinstr(const void *src, void *dst, size_t size, size_t *lenp)
+copystr(const void *kfaddr, void *kdaddr, size_t len, size_t *done)
 {
-	printf("%s\n", __func__);
-	return EFAULT;
+	const char *src = kfaddr;
+	char *dst = kdaddr;
+	size_t l = 0;
+
+	while (len-- > 0) {
+		l++;
+		if ((*dst++ = *src++) == 0) {
+			if (done)
+				*done = l;
+			return 0;
+		}
+	}
+	if (done)
+		*done = l;
+	return ENAMETOOLONG;
 }
 
 int
-copyoutstr(const void *src, void *dst, size_t size, size_t *lenp)
+copyinstr(const void *uaddr, void *kaddr, size_t len, size_t *done)
 {
-	printf("%s\n", __func__);
-	return EFAULT;
+	pmap_t pm = curproc->p_p->ps_vmspace->vm_map.pmap;
+	int error;
+
+	error = pmap_set_user_slb(pm, (vaddr_t)uaddr);
+	if (error)
+		return error;
+
+	curpcb->pcb_onfault = (caddr_t)1;
+	error = copystr(uaddr, kaddr, len, done);
+	curpcb->pcb_onfault = NULL;
+
+	pmap_unset_user_slb();
+	return error;
 }
 
 int
-kcopy(const void *src, void *dst, size_t size)
+copyoutstr(const void *kaddr, void *uaddr, size_t len, size_t *done)
 {
-	printf("%s\n", __func__);
-	return EFAULT;
+	pmap_t pm = curproc->p_p->ps_vmspace->vm_map.pmap;
+	int error;
+
+	error = pmap_set_user_slb(pm, (vaddr_t)uaddr);
+	if (error)
+		return error;
+
+	curpcb->pcb_onfault = (caddr_t)1;
+	error = copystr(kaddr, uaddr, len, done);
+	curpcb->pcb_onfault = NULL;
+
+	pmap_unset_user_slb();
+	return error;
 }
 
 void
@@ -447,8 +511,8 @@ need_resched(struct cpu_info *ci)
 void
 cpu_startup(void)
 {
+	vaddr_t minaddr, maxaddr, va;
 	paddr_t pa, epa;
-	vaddr_t va;
 	void *fdt;
 	void *node;
 	char *prop;
@@ -456,6 +520,24 @@ cpu_startup(void)
 
 	printf("%s", version);
 
+	/*
+	 * Allocate a submap for exec arguments.  This map effectively
+	 * limits the number of processes exec'ing at any time.
+	 */
+	minaddr = vm_map_min(kernel_map);
+	exec_map = uvm_km_suballoc(kernel_map, &minaddr, &maxaddr,
+	    16 * NCARGS, VM_MAP_PAGEABLE, FALSE, NULL);
+
+
+	/*
+	 * Allocate a submap for physio.
+	 */
+	phys_map = uvm_km_suballoc(kernel_map, &minaddr, &maxaddr,
+	    VM_PHYS_SIZE, 0, FALSE, NULL);
+
+	/*
+	 * Set up buffers, so they can be used to read disk labels.
+	 */
 	bufinit();
 
 	/* Remap the FDT. */
@@ -522,23 +604,134 @@ parse_bootargs(const char *bootargs)
 	}
 }
 
+#define PSL_USER \
+    (PSL_SF | PSL_HV | PSL_EE | PSL_PR | PSL_ME | PSL_IR | PSL_DR | PSL_RI)
+
 void
 setregs(struct proc *p, struct exec_package *pack, u_long stack,
     register_t *retval)
 {
-	printf("%s\n", __func__);
+	struct trapframe *frame = p->p_md.md_regs;
+	struct ps_strings arginfo;
+
+	copyin((void *)p->p_p->ps_strings, &arginfo, sizeof(arginfo));
+
+	frame->fixreg[1] = stack;
+	frame->fixreg[3] = arginfo.ps_nargvstr;
+	frame->fixreg[4] = (register_t)arginfo.ps_argvstr;
+	frame->fixreg[5] = (register_t)arginfo.ps_envstr;
+	frame->fixreg[6] = (register_t)pack->ep_emul_argp;
+	frame->fixreg[12] = pack->ep_entry;
+	frame->srr0 = pack->ep_entry;
+	frame->srr1 = PSL_USER;
+
+	retval[1] = 0;
 }
 
 void
 sendsig(sig_t catcher, int sig, sigset_t mask, const siginfo_t *ksip)
 {
-	printf("%s\n", __func__);
+	struct proc *p = curproc;
+	struct trapframe *tf = p->p_md.md_regs;
+	struct sigframe *fp, frame;
+	struct sigacts *psp = p->p_p->ps_sigacts;
+	siginfo_t *sip = NULL;
+	int i;
+
+	/* Allocate space for the signal handler context. */
+	if ((p->p_sigstk.ss_flags & SS_DISABLE) == 0 &&
+	    !sigonstack(tf->fixreg[1]) && (psp->ps_sigonstack & sigmask(sig)))
+		fp = (struct sigframe *)
+		    trunc_page((vaddr_t)p->p_sigstk.ss_sp + p->p_sigstk.ss_size);
+	else
+		fp = (struct sigframe *)tf->fixreg[1];
+
+	fp = (struct sigframe *)(STACKALIGN(fp - 1) - 288);
+
+	/* Build stack frame for signal trampoline. */
+	memset(&frame, 0, sizeof(frame));
+	frame.sf_signum = sig;
+
+	/* Save register context. */
+	for (i = 0; i < 32; i++)
+		frame.sf_sc.sc_frame.fixreg[i] = tf->fixreg[i];
+	frame.sf_sc.sc_frame.lr = tf->lr;
+	frame.sf_sc.sc_frame.cr = tf->cr;
+	frame.sf_sc.sc_frame.xer = tf->xer;
+	frame.sf_sc.sc_frame.ctr = tf->ctr;
+	frame.sf_sc.sc_frame.srr0 = tf->srr0;
+	frame.sf_sc.sc_frame.srr1 = tf->srr1;
+
+	/* Save signal mask. */
+	frame.sf_sc.sc_mask = mask;
+
+	if (psp->ps_siginfo & sigmask(sig)) {
+		sip = &fp->sf_si;
+		frame.sf_si = *ksip;
+	}
+
+	frame.sf_sc.sc_cookie = (long)&fp->sf_sc ^ p->p_p->ps_sigcookie;
+	if (copyout(&frame, fp, sizeof(frame)))
+		sigexit(p, SIGILL);
+
+	/*
+	 * Build context to run handler in.
+	 */
+	tf->fixreg[1] = (register_t)fp;
+	tf->fixreg[3] = sig;
+	tf->fixreg[4] = (register_t)sip;
+	tf->fixreg[5] = (register_t)&fp->sf_sc;
+	tf->fixreg[12] = (register_t)catcher;
+
+	tf->srr0 = p->p_p->ps_sigcode;
 }
 
 int
 sys_sigreturn(struct proc *p, void *v, register_t *retval)
 {
-	printf("%s\n", __func__);
+	struct sys_sigreturn_args /* {
+		syscallarg(struct sigcontext *) sigcntxp;
+	} */ *uap = v;
+	struct sigcontext ksc, *scp = SCARG(uap, sigcntxp);
+	struct trapframe *tf = p->p_md.md_regs;
+	int error;
+	int i;
+
+	if (PROC_PC(p) != p->p_p->ps_sigcoderet) {
+		sigexit(p, SIGILL);
+		return EPERM;
+	}
+
+	if ((error = copyin(scp, &ksc, sizeof ksc)))
+		return error;
+
+	if (ksc.sc_cookie != ((long)scp ^ p->p_p->ps_sigcookie)) {
+		sigexit(p, SIGILL);
+		return EFAULT;
+	}
+
+	/* Prevent reuse of the sigcontext cookie */
+	ksc.sc_cookie = 0;
+	(void)copyout(&ksc.sc_cookie, (caddr_t)scp +
+	    offsetof(struct sigcontext, sc_cookie), sizeof (ksc.sc_cookie));
+
+	/* Make sure the processor mode has not been tampered with. */
+	if (ksc.sc_frame.srr1 != PSL_USER)
+		return EINVAL;
+
+	/* Restore register context. */
+	for (i = 0; i < 32; i++)
+		tf->fixreg[i] = ksc.sc_frame.fixreg[i];
+	tf->lr = ksc.sc_frame.lr;
+	tf->cr = ksc.sc_frame.cr;
+	tf->xer = ksc.sc_frame.xer;
+	tf->ctr = ksc.sc_frame.ctr;
+	tf->srr0 = ksc.sc_frame.srr0;
+	tf->srr1 = ksc.sc_frame.srr1;
+
+	/* Restore signal mask. */
+	p->p_sigmask = ksc.sc_mask & ~sigcantmask;
+
 	return EJUSTRETURN;
 }
 

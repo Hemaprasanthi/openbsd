@@ -1292,6 +1292,7 @@
 ./usr/share/man/man4/bcmrng.4
 ./usr/share/man/man4/bcmsdhost.4
 ./usr/share/man/man4/bcmtemp.4
+./usr/share/man/man4/bcmtmon.4
 ./usr/share/man/man4/bdpmic.4
 ./usr/share/man/man4/berkwdt.4
 ./usr/share/man/man4/bge.4
@@ -1650,6 +1651,7 @@
 ./usr/share/man/man4/mviic.4
 ./usr/share/man/man4/mvneta.4
 ./usr/share/man/man4/mvpinctrl.4
+./usr/share/man/man4/mvpp.4
 ./usr/share/man/man4/mvrng.4
 ./usr/share/man/man4/mvrtc.4
 ./usr/share/man/man4/mvspi.4
@@ -1707,6 +1709,7 @@
 ./usr/share/man/man4/pair.4
 ./usr/share/man/man4/pcagpio.4
 ./usr/share/man/man4/pcaled.4
+./usr/share/man/man4/pcamux.4
 ./usr/share/man/man4/pcdisplay.4
 ./usr/share/man/man4/pcfadc.4
 ./usr/share/man/man4/pcfiic.4
@@ -2077,6 +2080,7 @@
 ./usr/share/man/man4/wdc.4
 ./usr/share/man/man4/wdsc.4
 ./usr/share/man/man4/we.4
+./usr/share/man/man4/wg.4
 ./usr/share/man/man4/wi.4
 ./usr/share/man/man4/witness.4
 ./usr/share/man/man4/wpi.4

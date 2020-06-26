@@ -1,4 +1,4 @@
-/*	$OpenBSD: locore.S,v 1.13 2020/06/14 17:56:54 kettenis Exp $	*/
+/*	$OpenBSD: locore.S,v 1.21 2020/06/26 19:12:32 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -18,6 +18,8 @@
 
 #include "assym.h"
 
+#include <sys/syscall.h>
+
 #include <machine/opal.h>
 #include <machine/psl.h>
 
@@ -28,6 +30,10 @@
 	.globl sigcode
 	.globl sigcoderet
 sigcode:
+	mtctr	%r12
+	bctrl
+	li	%r0, SYS_sigreturn
+	sc
 sigcoderet:
 	blr
 	.globl esigcode
@@ -57,6 +63,9 @@ cpu_idle_leave:
 
 	.globl cpu_switchto
 cpu_switchto:
+	cmpdi	%r3, 0
+	beq	1f
+
 	mflr	%r0
 	std	%r0, 16(%r1)
 	mfcr	%r10
@@ -84,12 +93,17 @@ cpu_switchto:
 	ld	%r31, P_ADDR(%r3)
 	std	%r1, PCB_SP(%r31)
 
+1:
 	li	%r31, SONPROC
 	stb	%r31, P_STAT(%r4)
 	std	%r4, CI_CURPROC(%r13)
 
 	ld	%r31, P_ADDR(%r4)
+	std	%r31, CI_CURPCB(%r13)
 	ld	%r1, PCB_SP(%r31)
+
+	ld	%r31, P_MD_USER_SLB_PA(%r4)
+	std	%r31, CI_USER_SLB_PA(%r13)
 
 	ld	%r31, SF_R31(%r1)
 	ld	%r30, SF_R30(%r1)
@@ -157,6 +171,7 @@ OPAL_CALL(OPAL_RTC_READ, opal_rtc_read)
 OPAL_CALL(OPAL_RTC_WRITE, opal_rtc_write)
 OPAL_CALL(OPAL_CEC_POWER_DOWN, opal_cec_power_down)
 OPAL_CALL(OPAL_CEC_REBOOT, opal_cec_reboot)
+OPAL_CALL(OPAL_HANDLE_INTERRUPT, opal_handle_interrupt)
 OPAL_CALL(OPAL_POLL_EVENTS, opal_poll_events)
 OPAL_CALL(OPAL_PCI_CONFIG_READ_WORD, opal_pci_config_read_word)
 OPAL_CALL(OPAL_PCI_CONFIG_WRITE_WORD, opal_pci_config_write_word)
