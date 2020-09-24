@@ -1,4 +1,4 @@
-#   $OpenBSD: tlsfuzzer.py,v 1.11 2020/06/24 07:29:21 tb Exp $
+#   $OpenBSD: tlsfuzzer.py,v 1.17 2020/09/10 08:24:31 tb Exp $
 #
 # Copyright (c) 2020 Theo Buehler <tb@openbsd.org>
 #
@@ -65,7 +65,6 @@ class TestGroup:
 tls13_unsupported_ciphers = [
     "-e", "TLS 1.3 with ffdhe2048",
     "-e", "TLS 1.3 with ffdhe3072",
-    "-e", "TLS 1.3 with secp521r1",   # XXX: why is this curve problematic?
     "-e", "TLS 1.3 with x448",
 ]
 
@@ -81,6 +80,7 @@ tls13_tests = TestGroup("TLSv1.3 tests", [
     Test("test-tls13-nociphers.py"),
     Test("test-tls13-record-padding.py"),
     Test("test-tls13-shuffled-extentions.py"),
+    Test("test-tls13-zero-content-type.py"),
 
     # The skipped tests fail due to a bug in BIO_gets() which masks the retry
     # signalled from an SSL_read() failure. Testing with httpd(8) shows we're
@@ -107,6 +107,12 @@ tls13_slow_tests = TestGroup("slow TLSv1.3 tests", [
         "-x", "max size payload (2**14) of Finished msg, with 16348 bytes of left padding, cipher TLS_AES_128_GCM_SHA256",
         "-x", "max size payload (2**14) of Finished msg, with 16348 bytes of left padding, cipher TLS_CHACHA20_POLY1305_SHA256",
     ]),
+    # We don't accept an empty ECPF extension since it must advertise the
+    # uncompressed point format. Exclude this extension type from the test.
+    Test(
+        "test-tls13-large-number-of-extensions.py",
+        tls13_args = ["--exc", "11"],
+    ),
 ])
 
 tls13_extra_cert_tests = TestGroup("TLSv1.3 certificate tests", [
@@ -163,16 +169,12 @@ tls13_slow_failing_tests = TestGroup("slow, failing TLSv1.3 tests", [
     # The following two tests fail Test (skip empty extensions for the first one):
     # 'empty unassigned extensions, ids in range from 2 to 4118'
     # 'unassigned extensions with random payload, ids in range from 2 to 1046'
-    Test("test-tls13-large-number-of-extensions.py"), # 2 fail: empty/random payload
 
     # 6 tests fail: 'rsa_pkcs1_{md5,sha{1,224,256,384,512}} signature'
     # We send server hello, but the test expects handshake_failure
     Test("test-tls13-pkcs-signature.py"),
     # 8 tests fail: 'tls13 signature rsa_pss_{pss,rsae}_sha{256,384,512}
     Test("test-tls13-rsapss-signatures.py"),
-
-    # ExpectNewSessionTicket
-    Test("test-tls13-session-resumption.py"),
 ])
 
 tls13_unsupported_tests = TestGroup("TLSv1.3 tests for unsupported features", [
@@ -193,6 +195,9 @@ tls13_unsupported_tests = TestGroup("TLSv1.3 tests for unsupported features", [
     # UnboundLocalError: local variable 'cert' referenced before assignment
     Test("test-tls13-post-handshake-auth.py"),
 
+    # ExpectNewSessionTicket
+    Test("test-tls13-session-resumption.py"),
+
     # Server must be configured to support only rsa_pss_rsae_sha512
     Test("test-tls13-signature-algorithms.py"),
 ])
@@ -205,11 +210,8 @@ tls12_exclude_legacy_protocols = [
     "-e", "Protocol (3, 1) in SSLv2 compatible ClientHello",
     "-e", "Protocol (3, 2) in SSLv2 compatible ClientHello",
     "-e", "Protocol (3, 3) in SSLv2 compatible ClientHello",
-    "-e", "Protocol (3, 1) with secp521r1 group",   # XXX
     "-e", "Protocol (3, 1) with x448 group",
-    "-e", "Protocol (3, 2) with secp521r1 group",   # XXX
     "-e", "Protocol (3, 2) with x448 group",
-    "-e", "Protocol (3, 3) with secp521r1 group",   # XXX
     "-e", "Protocol (3, 3) with x448 group",
 ]
 
@@ -490,6 +492,7 @@ class TestRunner:
 
         self.stats = []
         self.failed = []
+        self.missing = []
 
         self.timing = timing
         self.verbose = verbose
@@ -517,8 +520,13 @@ class TestRunner:
         else:
             print(f"{script[:68]:<72}", end=" ", flush=True)
         start = timer()
+        scriptpath = os.path.join(self.scriptdir, script)
+        if not os.path.exists(scriptpath):
+            self.missing.append(script)
+            print("MISSING")
+            return
         test = subprocess.run(
-            ["python3", os.path.join(self.scriptdir, script)] + args,
+            ["python3", scriptpath] + args,
             capture_output=not self.verbose,
             text=True,
         )
@@ -557,6 +565,10 @@ class TestRunner:
             print("Failed tests:")
             print('\n'.join(self.failed))
 
+        if self.missing:
+            print("Missing tests (outdated package?):")
+            print('\n'.join(self.missing))
+
 class TlsServer:
     """ Spawns an s_server listening on localhost:port if necessary. """
 
@@ -575,6 +587,8 @@ class TlsServer:
                     "s_server",
                     "-accept",
                     str(port),
+                    "-groups",
+                    "X25519:P-256:P-521:P-384",
                     "-key",
                     "localhost.key",
                     "-cert",

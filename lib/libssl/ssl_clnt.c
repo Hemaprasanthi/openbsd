@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_clnt.c,v 1.69 2020/06/05 17:53:26 jsing Exp $ */
+/* $OpenBSD: ssl_clnt.c,v 1.72 2020/09/17 15:23:29 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -775,7 +775,7 @@ ssl3_send_client_hello(SSL *s)
 			goto err;
 
 		/* TLS extensions */
-		if (!tlsext_client_build(s, &client_hello, SSL_TLSEXT_MSG_CH)) {
+		if (!tlsext_client_build(s, SSL_TLSEXT_MSG_CH, &client_hello)) {
 			SSLerror(s, ERR_R_INTERNAL_ERROR);
 			goto err;
 		}
@@ -802,12 +802,11 @@ ssl3_get_server_hello(SSL *s)
 	uint16_t server_version, cipher_suite;
 	uint16_t min_version, max_version;
 	uint8_t compression_method;
-	STACK_OF(SSL_CIPHER) *sk;
 	const SSL_CIPHER *cipher;
 	const SSL_METHOD *method;
 	unsigned long alg_k;
 	size_t outlen;
-	int i, al, ok;
+	int al, ok;
 	long n;
 
 	s->internal->first_packet = 1;
@@ -858,9 +857,7 @@ ssl3_get_server_hello(SSL *s)
 	}
 	s->version = server_version;
 
-	if ((method = tls1_get_client_method(server_version)) == NULL)
-		method = dtls1_get_client_method(server_version);
-	if (method == NULL) {
+	if ((method = ssl_get_client_method(server_version)) == NULL) {
 		SSLerror(s, ERR_R_INTERNAL_ERROR);
 		goto err;
 	}
@@ -981,9 +978,7 @@ ssl3_get_server_hello(SSL *s)
 		goto f_err;
 	}
 
-	sk = ssl_get_ciphers_by_id(s);
-	i = sk_SSL_CIPHER_find(sk, cipher);
-	if (i < 0) {
+	if (!ssl_cipher_in_list(SSL_get_ciphers(s), cipher)) {
 		/* we did not say we would use this cipher */
 		al = SSL_AD_ILLEGAL_PARAMETER;
 		SSLerror(s, SSL_R_WRONG_CIPHER_RETURNED);
@@ -1024,7 +1019,7 @@ ssl3_get_server_hello(SSL *s)
 		goto f_err;
 	}
 
-	if (!tlsext_client_parse(s, &cbs, &al, SSL_TLSEXT_MSG_SH)) {
+	if (!tlsext_client_parse(s, SSL_TLSEXT_MSG_SH, &cbs, &al)) {
 		SSLerror(s, SSL_R_PARSE_TLSEXT);
 		goto f_err;
 	}

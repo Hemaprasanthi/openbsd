@@ -1,4 +1,4 @@
-/*	$OpenBSD: exec.h,v 1.41 2020/05/10 00:56:06 guenther Exp $	*/
+/*	$OpenBSD: exec.h,v 1.42 2020/06/28 09:29:57 kettenis Exp $	*/
 /*	$NetBSD: exec.h,v 1.59 1996/02/09 18:25:09 christos Exp $	*/
 
 /*-
@@ -200,7 +200,7 @@ void	new_vmcmd(struct exec_vmcmd_set *evsp,
 	(vmc)->evs_cnt = EXEC_DEFAULT_VMCMD_SETSIZE; \
 	(vmc)->evs_cmds = (vmc)->evs_start; \
 	(vmc)->evs_used = 0; \
-} while (0)	
+} while (0)
 
 /*
  * Exec function switch:
@@ -283,12 +283,13 @@ struct exec {
 #define	MID_VAX		150	/* vax */
 #define	MID_SPARC64	151	/* LP64 sparc */
 #define MID_MIPS2	152	/* MIPS2 */
-#define	MID_M88K	153	/* m88k BSD binary */ 
+#define	MID_M88K	153	/* m88k BSD binary */
 #define	MID_HPPA	154	/* hppa */
 #define	MID_AMD64	157	/* AMD64 */
 #define	MID_MIPS64	158	/* big-endian MIPS64 */
 #define	MID_ARM64	159	/* ARM64 */
-#define	MID_RISCV64	160	/* riscv64 */
+#define	MID_POWERPC64	160	/* big-endian 64-bit PowerPC */
+#define	MID_RISCV64	161	/* riscv64 */
 #define	MID_HP200	200	/* hp200 (68010) BSD binary */
 #define	MID_HP300	300	/* hp300 (68020+68881) BSD binary */
 #define	MID_HPUX	0x20C	/* hp200/300 HP-UX binary */

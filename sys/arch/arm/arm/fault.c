@@ -1,4 +1,4 @@
-/*	$OpenBSD: fault.c,v 1.39 2019/09/06 12:22:01 deraadt Exp $	*/
+/*	$OpenBSD: fault.c,v 1.41 2020/09/14 18:23:32 deraadt Exp $	*/
 /*	$NetBSD: fault.c,v 1.46 2004/01/21 15:39:21 skrll Exp $	*/
 
 /*
@@ -208,10 +208,6 @@ data_abort_handler(trapframe_t *tf)
 	if (user) {
 		pcb->pcb_tf = tf;
 		refreshcreds(p);
-		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			goto out;
 	}
 
 	/* Invoke the appropriate handler, if necessary */
@@ -230,6 +226,13 @@ data_abort_handler(trapframe_t *tf)
 	 */
 	if (va < VM_MIN_ADDRESS || va >= VM_MAX_ADDRESS)
 		curcpu()->ci_flush_bp();
+
+	if (user) {
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+	}
 
 	/*
 	 * At this point, we're dealing with one of the following data aborts:
@@ -373,9 +376,7 @@ data_abort_handler(trapframe_t *tf)
 	sd.trap = fsr;
 do_trapsignal:
 	sv.sival_int = sd.addr;
-	KERNEL_LOCK();
 	trapsignal(p, sd.signo, sd.trap, sd.code, sv);
-	KERNEL_UNLOCK();
 out:
 	/* If returning to user mode, make sure to invoke userret() */
 	if (user)
@@ -596,13 +597,9 @@ prefetch_abort_handler(trapframe_t *tf)
 		printf("UVM: pid %d (%s), uid %d killed: "
 		    "out of swap\n", p->p_p->ps_pid, p->p_p->ps_comm,
 		    p->p_ucred ? (int)p->p_ucred->cr_uid : -1);
-		KERNEL_LOCK();
 		trapsignal(p, SIGKILL, 0, SEGV_MAPERR, sv);
-		KERNEL_UNLOCK();
 	} else {
-		KERNEL_LOCK();
 		trapsignal(p, SIGSEGV, 0, SEGV_MAPERR, sv);
-		KERNEL_UNLOCK();
 	}
 
 out:

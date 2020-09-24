@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.111 2019/12/11 07:21:40 guenther Exp $	*/
+/*	$OpenBSD: trap.c,v 1.113 2020/09/23 19:45:32 deraadt Exp $	*/
 /*
  * Copyright (c) 2004, Miodrag Vallat.
  * Copyright (c) 1998 Steve Murphree, Jr.
@@ -236,7 +236,7 @@ m88100_trap(u_int type, struct trapframe *frame)
 		p = &proc0;
 
 	if (USERMODE(frame->tf_epsr)) {
-		type += T_USER;
+		type |= T_USER;
 		p->p_md.md_tf = frame;	/* for ptrace/signals */
 		refreshcreds(p);
 		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
@@ -587,9 +587,7 @@ user_fault:
 
 	if (sig) {
 		sv.sival_ptr = (void *)fault_addr;
-		KERNEL_LOCK();
 		trapsignal(p, sig, fault_code, fault_type, sv);
-		KERNEL_UNLOCK();
 		/*
 		 * don't want multiple faults - we are going to
 		 * deliver signal.
@@ -680,7 +678,7 @@ m88110_trap(u_int type, struct trapframe *frame)
 	}
 
 	if (USERMODE(frame->tf_epsr)) {
-		type += T_USER;
+		type |= T_USER;
 		p->p_md.md_tf = frame;	/* for ptrace/signals */
 		refreshcreds(p);
 		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
@@ -1121,9 +1119,7 @@ m88110_user_fault:
 	if (sig) {
 deliver:
 		sv.sival_ptr = (void *)fault_addr;
-		KERNEL_LOCK();
 		trapsignal(p, sig, fault_code, fault_type, sv);
-		KERNEL_UNLOCK();
 	}
 
 userexit:
