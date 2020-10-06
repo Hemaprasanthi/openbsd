@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.37 2020/09/15 07:47:24 kettenis Exp $	*/
+/*	$OpenBSD: trap.c,v 1.40 2020/09/25 07:50:26 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -92,10 +92,6 @@ trap(struct trapframe *frame)
 		type |= EXC_USER;
 		p->p_md.md_regs = frame;
 		refreshcreds(p);
-		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			goto out;
 	}
 
 	switch (type) {
@@ -172,6 +168,11 @@ trap(struct trapframe *frame)
 		/* FALLTHROUGH */
 
 	case EXC_DSI|EXC_USER:
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+
 		map = &p->p_vmspace->vm_map;
 		va = frame->dar;
 		if (frame->dsisr & DSISR_STORE)
@@ -180,6 +181,8 @@ trap(struct trapframe *frame)
 			ftype = PROT_READ;
 		KERNEL_LOCK();
 		error = uvm_fault(map, trunc_page(va), 0, ftype);
+		if (error == 0)
+			uvm_grow(p, trunc_page(va));
 		KERNEL_UNLOCK();
 		if (error) {
 #ifdef TRAP_DEBUG
@@ -214,11 +217,18 @@ trap(struct trapframe *frame)
 		/* FALLTHROUGH */
 
 	case EXC_ISI|EXC_USER:
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+
 		map = &p->p_vmspace->vm_map;
 		va = frame->srr0;
 		ftype = PROT_READ | PROT_EXEC;
 		KERNEL_LOCK();
 		error = uvm_fault(map, trunc_page(va), 0, ftype);
+		if (error == 0)
+			uvm_grow(p, trunc_page(va));
 		KERNEL_UNLOCK();
 		if (error) {
 #ifdef TRAP_DEBUG
@@ -252,7 +262,7 @@ trap(struct trapframe *frame)
 	case EXC_AST|EXC_USER:
 		p->p_md.md_astpending = 0;
 		uvmexp.softs++;
-		mi_ast(p, ci->ci_want_resched);
+		mi_ast(p, curcpu()->ci_want_resched);
 		break;
 
 	case EXC_ALI|EXC_USER:
