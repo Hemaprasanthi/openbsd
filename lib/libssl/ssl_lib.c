@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_lib.c,v 1.233 2020/09/19 10:17:56 tb Exp $ */
+/* $OpenBSD: ssl_lib.c,v 1.237 2020/10/14 16:57:33 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -196,8 +196,7 @@ SSL_clear(SSL *s)
 	tls13_ctx_free(s->internal->tls13);
 	s->internal->tls13 = NULL;
 
-	BUF_MEM_free(s->internal->init_buf);
-	s->internal->init_buf = NULL;
+	ssl3_release_init_buffer(s);
 
 	ssl_clear_cipher_state(s);
 
@@ -346,7 +345,7 @@ SSL_new(SSL_CTX *ctx)
 		goto err;
 
 	s->references = 1;
-	s->server = (ctx->method->internal->ssl_accept == ssl_undefined_function) ? 0 : 1;
+	s->server = 0;
 
 	SSL_clear(s);
 
@@ -531,7 +530,7 @@ SSL_free(SSL *s)
 
 	tls13_ctx_free(s->internal->tls13);
 
-	BUF_MEM_free(s->internal->init_buf);
+	ssl3_release_init_buffer(s);
 
 	sk_SSL_CIPHER_free(s->cipher_list);
 	sk_SSL_CIPHER_free(s->internal->cipher_list_tls13);
@@ -940,6 +939,12 @@ SSL_connect(SSL *s)
 }
 
 int
+SSL_is_dtls(const SSL *s)
+{
+	return s->method->internal->dtls;
+}
+
+int
 SSL_is_server(const SSL *s)
 {
 	return s->server;
@@ -1146,7 +1151,7 @@ SSL_ctrl(SSL *s, int cmd, long larg, void *parg)
 		if (larg < (long)dtls1_min_mtu())
 			return (0);
 #endif
-		if (SSL_IS_DTLS(s)) {
+		if (SSL_is_dtls(s)) {
 			D1I(s)->mtu = larg;
 			return (larg);
 		}
@@ -1161,7 +1166,7 @@ SSL_ctrl(SSL *s, int cmd, long larg, void *parg)
 			return (S3I(s)->send_connection_binding);
 		else return (0);
 	default:
-		if (SSL_IS_DTLS(s))
+		if (SSL_is_dtls(s))
 			return dtls1_ctrl(s, cmd, larg, parg);
 		return ssl3_ctrl(s, cmd, larg, parg);
 	}

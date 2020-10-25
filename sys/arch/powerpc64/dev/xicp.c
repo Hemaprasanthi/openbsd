@@ -1,4 +1,4 @@
-/*	$OpenBSD: xicp.c,v 1.2 2020/09/21 11:14:28 kettenis Exp $	*/
+/*	$OpenBSD: xicp.c,v 1.4 2020/10/01 10:05:09 jsg Exp $	*/
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -182,6 +182,9 @@ xicp_intr_establish(uint32_t girq, int type, int level, struct cpu_info *ci,
 	int64_t error;
 	uint16_t server;
 
+	if (ci == NULL)
+		ci = cpu_info_primary;
+
 	ih = malloc(sizeof(*ih), M_DEVBUF, M_WAITOK);
 	ih->ih_func = func;
 	ih->ih_arg = arg;
@@ -200,7 +203,7 @@ xicp_intr_establish(uint32_t girq, int type, int level, struct cpu_info *ci,
 		if (name)
 			evcount_detach(&ih->ih_count);
 		LIST_REMOVE(ih, ih_hash);
-		free(ih, M_DEVBUF, sizeof(ih));
+		free(ih, M_DEVBUF, sizeof(*ih));
 		return NULL;
 	}
 

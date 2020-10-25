@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.79 2020/09/15 12:06:02 deraadt Exp $ */
+/*	$OpenBSD: main.c,v 1.84 2020/10/24 08:12:00 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -89,15 +89,16 @@ struct	repo {
 };
 
 int	timeout = 60*60;
+volatile sig_atomic_t killme;
 void	suicide(int sig);
 
 /*
  * Table of all known repositories.
  */
-struct	repotab {
+static struct	repotab {
 	struct repo	*repos; /* repositories */
 	size_t		 reposz; /* number of repos */
-};
+} rt;
 
 /*
  * An entity (MFT, ROA, certificate, etc.) that needs to be downloaded
@@ -201,19 +202,6 @@ filepath_exists(char *file)
 
 RB_GENERATE(filepath_tree, filepath, entry, filepathcmp);
 
-/*
- * Resolve the media type of a resource by looking at its suffice.
- * Returns the type of RTYPE_EOF if not found.
- */
-static enum rtype
-rtype_resolve(const char *uri)
-{
-	enum rtype	 rp;
-
-	rsync_uri_parse(NULL, NULL, NULL, NULL, NULL, NULL, &rp, uri);
-	return rp;
-}
-
 static void
 entity_free(struct entity *ent)
 {
@@ -308,7 +296,7 @@ entityq_flush(int fd, struct entityq *q, const struct repo *repo)
  * Look up a repository, queueing it for discovery if not found.
  */
 static const struct repo *
-repo_lookup(int fd, struct repotab *rt, const char *uri)
+repo_lookup(int fd, const char *uri)
 {
 	const char	*host, *mod;
 	size_t		 hostsz, modsz, i;
@@ -320,32 +308,32 @@ repo_lookup(int fd, struct repotab *rt, const char *uri)
 
 	/* Look up in repository table. */
 
-	for (i = 0; i < rt->reposz; i++) {
-		if (strlen(rt->repos[i].host) != hostsz)
+	for (i = 0; i < rt.reposz; i++) {
+		if (strlen(rt.repos[i].host) != hostsz)
 			continue;
-		if (strlen(rt->repos[i].module) != modsz)
+		if (strlen(rt.repos[i].module) != modsz)
 			continue;
-		if (strncasecmp(rt->repos[i].host, host, hostsz))
+		if (strncasecmp(rt.repos[i].host, host, hostsz))
 			continue;
-		if (strncasecmp(rt->repos[i].module, mod, modsz))
+		if (strncasecmp(rt.repos[i].module, mod, modsz))
 			continue;
-		return &rt->repos[i];
+		return &rt.repos[i];
 	}
 
-	rt->repos = reallocarray(rt->repos,
-		rt->reposz + 1, sizeof(struct repo));
-	if (rt->repos == NULL)
+	rt.repos = reallocarray(rt.repos,
+		rt.reposz + 1, sizeof(struct repo));
+	if (rt.repos == NULL)
 		err(1, "reallocarray");
 
-	rp = &rt->repos[rt->reposz++];
+	rp = &rt.repos[rt.reposz++];
 	memset(rp, 0, sizeof(struct repo));
-	rp->id = rt->reposz - 1;
+	rp->id = rt.reposz - 1;
 
 	if ((rp->host = strndup(host, hostsz)) == NULL ||
 	    (rp->module = strndup(mod, modsz)) == NULL)
 		err(1, "strndup");
 
-	i = rt->reposz - 1;
+	i = rt.reposz - 1;
 
 	if (!noop) {
 		logx("%s/%s: pulling from network", rp->host, rp->module);
@@ -359,6 +347,21 @@ repo_lookup(int fd, struct repotab *rt, const char *uri)
 		/* there is nothing in the queue so no need to flush */
 	}
 	return rp;
+}
+
+/*
+ * Build local file name base on the URI and the repo info.
+ */
+static char *
+repo_filename(const struct repo *repo, const char *uri)
+{
+	char *nfile;
+
+	uri += 8 + strlen(repo->host) + 1 + strlen(repo->module) + 1;
+
+	if (asprintf(&nfile, "%s/%s/%s", repo->host, repo->module, uri) == -1)
+		err(1, "asprintf");
+	return nfile;
 }
 
 /*
@@ -542,58 +545,53 @@ queue_add_tal(int fd, struct entityq *q, const char *file, size_t *eid)
 }
 
 /*
- * Add rsync URIs (CER) from a TAL file, RFC 7730.
- * Only use the first URI of the set.
+ * Add URIs (CER) from a TAL file, RFC 8630.
  */
 static void
 queue_add_from_tal(int proc, int rsync, struct entityq *q,
-    const struct tal *tal, struct repotab *rt, size_t *eid)
+    const struct tal *tal, size_t *eid)
 {
 	char			*nfile;
 	const struct repo	*repo;
-	const char		*uri;
+	const char		*uri = NULL;
+	size_t			 i;
 
 	assert(tal->urisz);
-	uri = tal->uri[0];
+
+	for (i = 0; i < tal->urisz; i++) {
+		uri = tal->uri[i];
+		if (strncasecmp(uri, "rsync://", 8) == 0)
+			break;
+	}
+	if (uri == NULL)
+		errx(1, "TAL file has no rsync:// URI");
 
 	/* Look up the repository. */
-
-	assert(rtype_resolve(uri) == RTYPE_CER);
-	repo = repo_lookup(rsync, rt, uri);
-	uri += 8 + strlen(repo->host) + 1 + strlen(repo->module) + 1;
-
-	if (asprintf(&nfile, "%s/%s/%s", repo->host, repo->module, uri) == -1)
-		err(1, "asprintf");
+	repo = repo_lookup(rsync, uri);
+	nfile = repo_filename(repo, uri);
 
 	entityq_add(proc, q, nfile, RTYPE_CER, repo, NULL, tal->pkey,
 	    tal->pkeysz, tal->descr, eid);
 }
 
 /*
- * Add a manifest (MFT) or CRL found in an X509 certificate, RFC 6487.
+ * Add a manifest (MFT) found in an X509 certificate, RFC 6487.
  */
 static void
 queue_add_from_cert(int proc, int rsync, struct entityq *q,
-    const char *uri, struct repotab *rt, size_t *eid)
+    const char *rsyncuri, const char *rrdpuri, size_t *eid)
 {
 	char			*nfile;
-	enum rtype		 type;
 	const struct repo	*repo;
 
-	if ((type = rtype_resolve(uri)) == RTYPE_EOF)
-		errx(1, "%s: unknown file type", uri);
-	if (type != RTYPE_MFT)
-		errx(1, "%s: invalid file type", uri);
+	if (rsyncuri == NULL)
+		return;
 
 	/* Look up the repository. */
+	repo = repo_lookup(rsync, rsyncuri);
+	nfile = repo_filename(repo, rsyncuri);
 
-	repo = repo_lookup(rsync, rt, uri);
-	uri += 8 + strlen(repo->host) + 1 + strlen(repo->module) + 1;
-
-	if (asprintf(&nfile, "%s/%s/%s", repo->host, repo->module, uri) == -1)
-		err(1, "asprintf");
-
-	entityq_add(proc, q, nfile, type, repo, NULL, NULL, 0, NULL, eid);
+	entityq_add(proc, q, nfile, RTYPE_MFT, repo, NULL, NULL, 0, NULL, eid);
 }
 
 /*
@@ -1159,7 +1157,7 @@ out:
  */
 static void
 entity_process(int proc, int rsync, struct stats *st,
-    struct entityq *q, const struct entity *ent, struct repotab *rt,
+    struct entityq *q, const struct entity *ent,
     size_t *eid, struct vrp_tree *tree)
 {
 	struct tal	*tal;
@@ -1179,7 +1177,7 @@ entity_process(int proc, int rsync, struct stats *st,
 	case RTYPE_TAL:
 		st->tals++;
 		tal = tal_read(proc);
-		queue_add_from_tal(proc, rsync, q, tal, rt, eid);
+		queue_add_from_tal(proc, rsync, q, tal, eid);
 		tal_free(tal);
 		break;
 	case RTYPE_CER:
@@ -1197,9 +1195,8 @@ entity_process(int proc, int rsync, struct stats *st,
 			 * we're revoked and then we don't want to
 			 * process the MFT.
 			 */
-			if (cert->mft != NULL)
-				queue_add_from_cert(proc, rsync,
-				    q, cert->mft, rt, eid);
+			queue_add_from_cert(proc, rsync,
+			    q, cert->mft, cert->notify, eid);
 		} else
 			st->certs_invalid++;
 		cert_free(cert);
@@ -1287,7 +1284,7 @@ add_to_del(char **del, size_t *dsz, char *file)
 }
 
 static size_t
-repo_cleanup(const char *cachedir, struct repotab *rt)
+repo_cleanup(const char *cachedir)
 {
 	size_t i, delsz = 0;
 	char *argv[2], **del = NULL;
@@ -1298,9 +1295,9 @@ repo_cleanup(const char *cachedir, struct repotab *rt)
 	if (chdir(cachedir) == -1)
 		err(1, "%s: chdir", cachedir);
 
-	for (i = 0; i < rt->reposz; i++) {
-		if (asprintf(&argv[0], "%s/%s", rt->repos[i].host,
-		    rt->repos[i].module) == -1)
+	for (i = 0; i < rt.reposz; i++) {
+		if (asprintf(&argv[0], "%s/%s", rt.repos[i].host,
+		    rt.repos[i].module) == -1)
 			err(1, NULL);
 		argv[1] = NULL;
 		if ((fts = fts_open(argv, FTS_PHYSICAL | FTS_NOSTAT,
@@ -1357,15 +1354,8 @@ repo_cleanup(const char *cachedir, struct repotab *rt)
 void
 suicide(int sig __attribute__((unused)))
 {
-	struct syslog_data sdata = SYSLOG_DATA_INIT;
-	
+	killme = 1;
 
-	dprintf(STDERR_FILENO,
-	    "%s: excessive runtime (%d seconds), giving up\n",
-	    getprogname(), timeout);
-	syslog_r(LOG_CRIT|LOG_DAEMON, &sdata,
-	    "excessive runtime (%d seconds), giving up", timeout);
-	_exit(1);
 }
 
 int
@@ -1379,7 +1369,6 @@ main(int argc, char *argv[])
 	struct entityq	 q;
 	struct entity	*ent;
 	struct pollfd	 pfd[2];
-	struct repotab	 rt;
 	struct roa	**out = NULL;
 	char		*rsync_prog = "openrsync";
 	char		*bind_addr = NULL;
@@ -1439,7 +1428,7 @@ main(int argc, char *argv[])
 		case 's':
 			timeout = strtonum(optarg, 0, 24*60*60, &errs);
 			if (errs)
-				err(1, "-t: %s\n", errs);
+				errx(1, "-s: %s", errs);
 			break;
 		case 't':
 			if (talsz >= TALSZ_MAX)
@@ -1487,7 +1476,6 @@ main(int argc, char *argv[])
 	if (talsz == 0)
 		err(1, "no TAL files found in %s", "/etc/rpki");
 
-	memset(&rt, 0, sizeof(struct repotab));
 	TAILQ_INIT(&q);
 
 	/*
@@ -1578,9 +1566,12 @@ main(int argc, char *argv[])
 	pfd[1].fd = proc;
 	pfd[0].events = pfd[1].events = POLLIN;
 
-	while (!TAILQ_EMPTY(&q)) {
-		if ((c = poll(pfd, 2, verbose ? 10000 : INFTIM)) == -1)
+	while (!TAILQ_EMPTY(&q) && !killme) {
+		if ((c = poll(pfd, 2, verbose ? 10000 : INFTIM)) == -1) {
+			if (errno == EINTR)
+				continue;
 			err(1, "poll");
+		}
 
 		/* Debugging: print some statistics if we stall. */
 
@@ -1636,11 +1627,17 @@ main(int argc, char *argv[])
 		if ((pfd[1].revents & POLLIN)) {
 			ent = entityq_next(proc, &q);
 			entity_process(proc, rsync, &stats,
-			    &q, ent, &rt, &eid, &v);
+			    &q, ent, &eid, &v);
 			if (verbose > 2)
 				fprintf(stderr, "%s\n", ent->uri);
 			entity_free(ent);
 		}
+	}
+
+	if (killme) {
+		syslog(LOG_CRIT|LOG_DAEMON,
+		    "excessive runtime (%d seconds), giving up", timeout);
+		errx(1, "excessive runtime (%d seconds), giving up", timeout);
 	}
 
 	assert(TAILQ_EMPTY(&q));
@@ -1684,7 +1681,7 @@ main(int argc, char *argv[])
 	if (outputfiles(&v, &stats))
 		rc = 1;
 
-	stats.del_files = repo_cleanup(cachedir, &rt);
+	stats.del_files = repo_cleanup(cachedir);
 
 	logx("Route Origin Authorizations: %zu (%zu failed parse, %zu invalid)",
 	    stats.roas, stats.roas_fail, stats.roas_invalid);

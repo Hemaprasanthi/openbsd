@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_amap.c,v 1.83 2020/09/22 14:31:08 mpi Exp $	*/
+/*	$OpenBSD: uvm_amap.c,v 1.85 2020/10/12 08:44:45 mpi Exp $	*/
 /*	$NetBSD: uvm_amap.c,v 1.27 2000/11/25 06:27:59 chs Exp $	*/
 
 /*
@@ -669,9 +669,7 @@ ReStart:
 			pg = anon->an_page;
 
 			/* page must be resident since parent is wired */
-			if (pg == NULL)
-				panic("amap_cow_now: non-resident wired page"
-				    " in anon %p", anon);
+			KASSERT(pg != NULL);
 
 			/*
 			 * if the anon ref count is one, we are safe (the child
@@ -740,6 +738,7 @@ ReStart:
 void
 amap_splitref(struct vm_aref *origref, struct vm_aref *splitref, vaddr_t offset)
 {
+	struct vm_amap *amap = origref->ar_amap;
 	int leftslots;
 
 	AMAP_B2SLOT(leftslots, offset);
@@ -747,17 +746,18 @@ amap_splitref(struct vm_aref *origref, struct vm_aref *splitref, vaddr_t offset)
 		panic("amap_splitref: split at zero offset");
 
 	/* now: we have a valid am_mapped array. */
-	if (origref->ar_amap->am_nslot - origref->ar_pageoff - leftslots <= 0)
+	if (amap->am_nslot - origref->ar_pageoff - leftslots <= 0)
 		panic("amap_splitref: map size check failed");
 
 #ifdef UVM_AMAP_PPREF
-        /* establish ppref before we add a duplicate reference to the amap */
-	if (origref->ar_amap->am_ppref == NULL)
-		amap_pp_establish(origref->ar_amap);
+        /* Establish ppref before we add a duplicate reference to the amap. */
+	if (amap->am_ppref == NULL)
+		amap_pp_establish(amap);
 #endif
 
-	splitref->ar_amap = origref->ar_amap;
-	splitref->ar_amap->am_ref++;		/* not a share reference */
+	/* Note: not a share reference. */
+	amap->am_ref++;
+	splitref->ar_amap = amap;
 	splitref->ar_pageoff = origref->ar_pageoff + leftslots;
 }
 
@@ -1019,9 +1019,7 @@ amap_lookup(struct vm_aref *aref, vaddr_t offset)
 
 	AMAP_B2SLOT(slot, offset);
 	slot += aref->ar_pageoff;
-
-	if (slot >= amap->am_nslot)
-		panic("amap_lookup: offset out of range");
+	KASSERT(slot < amap->am_nslot);
 
 	chunk = amap_chunk_get(amap, slot, 0, PR_NOWAIT);
 	if (chunk == NULL)
@@ -1046,8 +1044,7 @@ amap_lookups(struct vm_aref *aref, vaddr_t offset,
 	AMAP_B2SLOT(slot, offset);
 	slot += aref->ar_pageoff;
 
-	if ((slot + (npages - 1)) >= amap->am_nslot)
-		panic("amap_lookups: offset out of range");
+	KASSERT((slot + (npages - 1)) < amap->am_nslot);
 
 	for (i = 0, lcv = slot; lcv < slot + npages; i += n, lcv += n) {
 		n = UVM_AMAP_CHUNK - UVM_AMAP_SLOTIDX(lcv);
@@ -1078,9 +1075,7 @@ amap_populate(struct vm_aref *aref, vaddr_t offset)
 
 	AMAP_B2SLOT(slot, offset);
 	slot += aref->ar_pageoff;
-
-	if (slot >= amap->am_nslot)
-		panic("amap_populate: offset out of range");
+	KASSERT(slot < amap->am_nslot);
 
 	chunk = amap_chunk_get(amap, slot, 1, PR_WAITOK);
 	KASSERT(chunk != NULL);
@@ -1101,21 +1096,19 @@ amap_add(struct vm_aref *aref, vaddr_t offset, struct vm_anon *anon,
 
 	AMAP_B2SLOT(slot, offset);
 	slot += aref->ar_pageoff;
+	KASSERT(slot < amap->am_nslot);
 
-	if (slot >= amap->am_nslot)
-		panic("amap_add: offset out of range");
 	chunk = amap_chunk_get(amap, slot, 1, PR_NOWAIT);
 	if (chunk == NULL)
 		return 1;
 
 	slot = UVM_AMAP_SLOTIDX(slot);
 	if (replace) {
-		if (chunk->ac_anon[slot] == NULL)
-			panic("amap_add: replacing null anon");
-		if (chunk->ac_anon[slot]->an_page != NULL &&
-		    (amap->am_flags & AMAP_SHARED) != 0) {
-			pmap_page_protect(chunk->ac_anon[slot]->an_page,
-			    PROT_NONE);
+		struct vm_anon *oanon  = chunk->ac_anon[slot];
+
+		KASSERT(oanon != NULL);
+		if (oanon->an_page && (amap->am_flags & AMAP_SHARED) != 0) {
+			pmap_page_protect(oanon->an_page, PROT_NONE);
 			/*
 			 * XXX: suppose page is supposed to be wired somewhere?
 			 */
@@ -1144,16 +1137,12 @@ amap_unadd(struct vm_aref *aref, vaddr_t offset)
 
 	AMAP_B2SLOT(slot, offset);
 	slot += aref->ar_pageoff;
-
-	if (slot >= amap->am_nslot)
-		panic("amap_unadd: offset out of range");
+	KASSERT(slot < amap->am_nslot);
 	chunk = amap_chunk_get(amap, slot, 0, PR_NOWAIT);
-	if (chunk == NULL)
-		panic("amap_unadd: chunk for slot %d not present", slot);
+	KASSERT(chunk != NULL);
 
 	slot = UVM_AMAP_SLOTIDX(slot);
-	if (chunk->ac_anon[slot] == NULL)
-		panic("amap_unadd: nothing there");
+	KASSERT(chunk->ac_anon[slot] != NULL);
 
 	chunk->ac_anon[slot] = NULL;
 	chunk->ac_usedmap &= ~(1 << slot);

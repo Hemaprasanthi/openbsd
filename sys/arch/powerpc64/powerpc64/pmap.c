@@ -1,4 +1,4 @@
-/*	$OpenBSD: pmap.c,v 1.48 2020/09/07 18:51:47 kettenis Exp $ */
+/*	$OpenBSD: pmap.c,v 1.52 2020/10/22 15:54:10 kettenis Exp $ */
 
 /*
  * Copyright (c) 2015 Martin Pieuchot
@@ -48,6 +48,7 @@
  */
 
 #include <sys/param.h>
+#include <sys/systm.h>
 #include <sys/atomic.h>
 #include <sys/pool.h>
 #include <sys/proc.h>
@@ -964,27 +965,23 @@ pmap_vp_destroy(pmap_t pm)
 
 	while ((slbd = LIST_FIRST(&pm->pm_slbd))) {
 		vp1 = slbd->slbd_vp;
-		if (vp1 == NULL)
-			continue;
-
-		for (i = 0; i < VP_IDX1_CNT; i++) {
-			vp2 = vp1->vp[i];
-			if (vp2 == NULL)
-				continue;
-			vp1->vp[i] = NULL;
-
-			for (j = 0; j < VP_IDX2_CNT; j++) {
-				pted = vp2->vp[j];
-				if (pted == NULL)
+		if (vp1) {
+			for (i = 0; i < VP_IDX1_CNT; i++) {
+				vp2 = vp1->vp[i];
+				if (vp2 == NULL)
 					continue;
-				vp2->vp[j] = NULL;
 
-				pool_put(&pmap_pted_pool, pted);
+				for (j = 0; j < VP_IDX2_CNT; j++) {
+					pted = vp2->vp[j];
+					if (pted == NULL)
+						continue;
+
+					pool_put(&pmap_pted_pool, pted);
+				}
+				pool_put(&pmap_vp_pool, vp2);
 			}
-			pool_put(&pmap_vp_pool, vp2);
+			pool_put(&pmap_vp_pool, vp1);
 		}
-		slbd->slbd_vp = NULL;
-		pool_put(&pmap_vp_pool, vp1);
 
 		LIST_REMOVE(slbd, slbd_list);
 		pmap_free_vsid(slbd->slbd_vsid);
@@ -1435,9 +1432,11 @@ pmap_zero_page(struct vm_page *pg)
 {
 	paddr_t pa = VM_PAGE_TO_PHYS(pg);
 	paddr_t va = zero_page + cpu_number() * PAGE_SIZE;
+	int offset;
 
 	pmap_kenter_pa(va, pa, PROT_READ | PROT_WRITE);
-	memset((void *)va, 0, PAGE_SIZE);
+	for (offset = 0; offset < PAGE_SIZE; offset += cacheline_size)
+		__asm volatile ("dcbz 0, %0" :: "r"(va + offset));
 	pmap_kremove(va, PAGE_SIZE);
 }
 
@@ -1459,7 +1458,26 @@ pmap_copy_page(struct vm_page *srcpg, struct vm_page *dstpg)
 void
 pmap_proc_iflush(struct process *pr, vaddr_t va, vsize_t len)
 {
-	panic(__func__);
+	paddr_t pa;
+	vaddr_t cva;
+	vsize_t clen;
+
+	while (len > 0) {
+		/* add one to always round up to the next page */
+		clen = round_page(va + 1) - va;
+		if (clen > len)
+			clen = len;
+
+		if (pmap_extract(pr->ps_vmspace->vm_map.pmap, va, &pa)) {
+			cva = zero_page + cpu_number() * PAGE_SIZE;
+			pmap_kenter_pa(cva, pa, PROT_READ | PROT_WRITE);
+			__syncicache((void *)cva, clen);
+			pmap_kremove(cva, PAGE_SIZE);
+		}
+
+		len -= clen;
+		va += clen;
+	}
 }
 
 void

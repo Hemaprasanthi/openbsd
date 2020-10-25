@@ -678,7 +678,7 @@ subagentx_context_object_nfind(struct subagentx_context *sac,
 	    agentx_oid_cmp(&(sao_search.sao_oid), &(sao->sao_oid)) <= 0) {
 		sao = RB_NEXT(sac_objects, &(sac->sac_objects), sao);
 	}
-	
+
 	while (active && sao != NULL && sao->sao_cstate != SA_CSTATE_OPEN)
 		sao = RB_NEXT(sac_objects, &(sac->sac_objects), sao);
 	return sao;
@@ -1089,7 +1089,7 @@ subagentx_region_finalize(struct agentx_pdu *pdu, void *cookie)
 			return subagentx_region_start(sar);
 		}
 		subagentx_log_sac_info(sac, "region %s: duplicate, can't "
-		    "reduce priority, ignoring", 
+		    "reduce priority, ignoring",
 		    agentx_oid2string(&(sar->sar_oid)));
 	} else if (pdu->ap_payload.ap_response.ap_error ==
 	    AGENTX_PDU_ERROR_REQUESTDENIED) {
@@ -1718,7 +1718,7 @@ subagentx_index_finalize(struct agentx_pdu *pdu, void *cookie)
 	/* TODO Make use of range_subid register */
 	for (i = 0; i < sai->sai_objectlen; i++) {
 		if (sai->sai_object[i]->sao_dstate == SA_DSTATE_OPEN) {
-			if (subagentx_object_start(sai->sai_object[i]) == -1) 
+			if (subagentx_object_start(sai->sai_object[i]) == -1)
 				return -1;
 		}
 	}
@@ -1729,6 +1729,7 @@ void
 subagentx_index_free(struct subagentx_index *sai)
 {
 	size_t i;
+	struct subagentx_object *sao;
 
 	if (sai == NULL)
 		return;
@@ -1737,13 +1738,17 @@ subagentx_index_free(struct subagentx_index *sai)
 		subagentx_log_sac_fatalx(sai->sai_sar->sar_sac,
 		    "%s: double free", __func__);
 
-	sai->sai_dstate = SA_DSTATE_CLOSE;
-
 	/* TODO Do a range_subid unregister before freeing */
 	for (i = 0; i < sai->sai_objectlen; i++) {
-		if (sai->sai_object[i]->sao_dstate != SA_DSTATE_CLOSE)
-			subagentx_object_free(sai->sai_object[i]);
+		sao = sai->sai_object[i];
+		if (sao->sao_dstate != SA_DSTATE_CLOSE) {
+			subagentx_object_free(sao);
+			if (sai->sai_object[i] != sao)
+				i--;
+		}
 	}
+
+	sai->sai_dstate = SA_DSTATE_CLOSE;
 
 	if (sai->sai_cstate == SA_CSTATE_OPEN)
 		(void) subagentx_index_close(sai);
@@ -2415,7 +2420,8 @@ subagentx_object_free_finalize(struct subagentx_object *sao)
 			    "%s: object not found in index", __func__);
 #endif
 		sao->sao_index[i]->sai_objectlen--;
-		if (sao->sao_index[i]->sai_dstate == SA_DSTATE_CLOSE)
+		if (sao->sao_index[i]->sai_dstate == SA_DSTATE_CLOSE &&
+		    sao->sao_index[i]->sai_cstate == SA_CSTATE_CLOSE)
 			subagentx_index_free_finalize(sao->sao_index[i]);
 	}
 
@@ -2553,7 +2559,7 @@ subagentx_get_start(struct subagentx_context *sac, struct agentx_pdu *pdu)
 			fail |= subagentx_strcat(&logmsg, " (inclusive)");
 		if (srl->ap_sr[i].asr_stop.aoi_idlen != 0) {
 			fail |= subagentx_strcat(&logmsg, " - ");
-			fail |= subagentx_strcat(&logmsg, 
+			fail |= subagentx_strcat(&logmsg,
 			    agentx_oid2string(&(srl->ap_sr[i].asr_stop)));
 		}
 		fail |= subagentx_strcat(&logmsg, "}");
@@ -2679,8 +2685,10 @@ subagentx_get_free(struct subagentx_get *sag)
 		    j < sav->sav_sao->sao_indexlen; j++) {
 			sao = sav->sav_sao;
 			index = &(sav->sav_index[j]);
-			if (sao->sao_index[j]->sai_vb.avb_type == 
-			    AGENTX_DATA_TYPE_OCTETSTRING)
+			if (sao->sao_index[j]->sai_vb.avb_type ==
+			    AGENTX_DATA_TYPE_OCTETSTRING ||
+			    sao->sao_index[j]->sai_vb.avb_type ==
+			    AGENTX_DATA_TYPE_IPADDRESS)
 				free(index->sav_idata.avb_ostring.aos_string);
 		}
 		agentx_varbind_free(&(sag->sag_varbind[i].sav_vb));
@@ -2853,7 +2861,7 @@ getnext:
 			break;
 		case AGENTX_DATA_TYPE_OCTETSTRING:
 			if (!subagentx_object_implied(sao, index->sav_sai)) {
-				if (overflow || sav->sav_vb.avb_oid.aoi_id[j] > 
+				if (overflow || sav->sav_vb.avb_oid.aoi_id[j] >
 				    SUBAGENTX_OID_MAX_LEN -
 				    sav->sav_vb.avb_oid.aoi_idlen) {
 					overflow = 1;
@@ -2897,7 +2905,7 @@ getnext:
 			break;
 		case AGENTX_DATA_TYPE_OID:
 			if (!subagentx_object_implied(sao, index->sav_sai)) {
-				if (overflow || sav->sav_vb.avb_oid.aoi_id[j] > 
+				if (overflow || sav->sav_vb.avb_oid.aoi_id[j] >
 				    SUBAGENTX_OID_MAX_LEN -
 				    sav->sav_vb.avb_oid.aoi_idlen) {
 					overflow = 1;
@@ -3172,7 +3180,7 @@ subagentx_varbind_notfound(struct subagentx_varbind *sav)
 #else
 		subagentx_log_sag_warnx(sav->sav_sag, "%s invalid call",
 		    __func__);
-		subagentx_varbind_error_type(sav, 
+		subagentx_varbind_error_type(sav,
 		    AGENTX_PDU_ERROR_GENERR, 1);
 #endif
 	} else if (sav->sav_sag->sag_type == AGENTX_PDU_TYPE_GET)
@@ -3301,7 +3309,6 @@ fail:
 	sav->sav_error = AGENTX_PDU_ERROR_GENERR;
 	subagentx_object_unlock(sav->sav_sao);
 	subagentx_get_finalize(sav->sav_sag);
-	
 }
 
 static void
@@ -3329,6 +3336,7 @@ subagentx_varbind_endofmibview(struct subagentx_varbind *sav)
 {
 	struct subagentx_object *sao;
 	struct agentx_varbind *vb;
+	struct subagentx_varbind_index *index;
 	size_t i;
 
 #ifdef AGENTX_DEBUG
@@ -3346,10 +3354,11 @@ subagentx_varbind_endofmibview(struct subagentx_varbind *sav)
 		    sizeof(sao->sao_oid));
 		sav->sav_include = 1;
 		for (i = 0; i < sav->sav_indexlen; i++) {
-			vb = &(sav->sav_index[i].sav_sai->sai_vb);
+			index = &(sav->sav_index[i]);
+			vb = &(index->sav_sai->sai_vb);
 			if (vb->avb_type == AGENTX_DATA_TYPE_OCTETSTRING ||
 			    vb->avb_type == AGENTX_DATA_TYPE_IPADDRESS)
-				free(vb->avb_data.avb_ostring.aos_string);
+				free(index->sav_idata.avb_ostring.aos_string);
 		}
 		bzero(&(sav->sav_index), sizeof(sav->sav_index));
 		subagentx_object_unlock(sav->sav_sao);

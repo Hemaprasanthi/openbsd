@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.147 2020/09/24 11:36:50 deraadt Exp $	*/
+/*	$OpenBSD: trap.c,v 1.150 2020/10/08 19:41:04 deraadt Exp $	*/
 /*	$NetBSD: trap.c,v 1.95 1996/05/05 06:50:02 mycroft Exp $	*/
 
 /*-
@@ -116,7 +116,7 @@ trap(struct trapframe *frame)
 	    resume_pop_fs[], resume_pop_gs[];
 	struct trapframe *vframe;
 	int resume;
-	vm_prot_t ftype;
+	vm_prot_t access_type;
 	union sigval sv;
 	caddr_t onfault;
 	vaddr_t gdt_cs = SEGDESC_LIMIT(curcpu()->ci_gdt[GUCODE_SEL].sd);
@@ -126,11 +126,11 @@ trap(struct trapframe *frame)
 
 	/* SIGSEGV and SIGBUS need this */
 	if (frame->tf_err & PGEX_W) {
-		ftype = PROT_WRITE;
+		access_type = PROT_WRITE;
 	} else if (frame->tf_err & PGEX_I) {
-		ftype = PROT_EXEC;
+		access_type = PROT_EXEC;
 	} else
-		ftype = PROT_READ;
+		access_type = PROT_READ;
 
 #ifdef DEBUG
 	if (trapdebug) {
@@ -154,10 +154,6 @@ trap(struct trapframe *frame)
 		type |= T_USER;
 		p->p_md.md_regs = frame;
 		refreshcreds(p);
-		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			goto out;
 	}
 
 	switch (type) {
@@ -349,6 +345,10 @@ trap(struct trapframe *frame)
 		int error;
 		int signal, sicode;
 
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
 		KERNEL_LOCK();
 	faultcommon:
 		vm = p->p_vmspace;
@@ -379,7 +379,7 @@ trap(struct trapframe *frame)
 		if (curcpu()->ci_inatomic == 0 || map == kernel_map) {
 			onfault = p->p_addr->u_pcb.pcb_onfault;
 			p->p_addr->u_pcb.pcb_onfault = NULL;
-			error = uvm_fault(map, va, 0, ftype);
+			error = uvm_fault(map, va, 0, access_type);
 			p->p_addr->u_pcb.pcb_onfault = onfault;
 		} else
 			error = EFAULT;
@@ -401,7 +401,7 @@ trap(struct trapframe *frame)
 				goto copyfault;
 			}
 			printf("uvm_fault(%p, 0x%lx, 0, %d) -> %x\n",
-			    map, va, ftype, error);
+			    map, va, access_type, error);
 			goto we_re_toast;
 		}
 
@@ -476,7 +476,7 @@ ast(struct trapframe *frame)
 	p->p_md.md_regs = frame;
 	refreshcreds(p);
 	uvmexp.softs++;
-	mi_ast(p, want_resched);
+	mi_ast(p, curcpu()->ci_want_resched);
 	userret(p);
 }
 

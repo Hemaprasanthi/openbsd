@@ -1,4 +1,4 @@
-/*	$OpenBSD: trap.c,v 1.37 2020/09/15 07:47:24 kettenis Exp $	*/
+/*	$OpenBSD: trap.c,v 1.45 2020/10/22 13:41:49 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2020 Mark Kettenis <kettenis@openbsd.org>
@@ -17,6 +17,7 @@
  */
 
 #include <sys/param.h>
+#include <sys/systm.h>
 #include <sys/proc.h>
 #include <sys/signalvar.h>
 #include <sys/user.h>
@@ -40,7 +41,9 @@ void	exi_intr(struct trapframe *);  /* intr.c */
 void	hvi_intr(struct trapframe *);  /* intr.c */
 void	syscall(struct trapframe *);   /* syscall.c */
 
+#ifdef TRAP_DEBUG
 void	dumpframe(struct trapframe *);
+#endif
 
 void
 trap(struct trapframe *frame)
@@ -52,7 +55,7 @@ trap(struct trapframe *frame)
 	struct vm_map *map;
 	pmap_t pm;
 	vaddr_t va;
-	int ftype;
+	int access_type;
 	int error, sig, code;
 
 	/* Disable access to floating-point and vector registers. */
@@ -92,10 +95,6 @@ trap(struct trapframe *frame)
 		type |= EXC_USER;
 		p->p_md.md_regs = frame;
 		refreshcreds(p);
-		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
-		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
-		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
-			goto out;
 	}
 
 	switch (type) {
@@ -124,11 +123,11 @@ trap(struct trapframe *frame)
 			va = curpcb->pcb_userva | (va & SEGMENT_MASK);
 		}
 		if (frame->dsisr & DSISR_STORE)
-			ftype = PROT_READ | PROT_WRITE;
+			access_type = PROT_READ | PROT_WRITE;
 		else
-			ftype = PROT_READ;
+			access_type = PROT_READ;
 		KERNEL_LOCK();
-		error = uvm_fault(map, trunc_page(va), 0, ftype);
+		error = uvm_fault(map, trunc_page(va), 0, access_type);
 		KERNEL_UNLOCK();
 		if (error == 0)
 			return;
@@ -172,15 +171,23 @@ trap(struct trapframe *frame)
 		/* FALLTHROUGH */
 
 	case EXC_DSI|EXC_USER:
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+
 		map = &p->p_vmspace->vm_map;
 		va = frame->dar;
 		if (frame->dsisr & DSISR_STORE)
-			ftype = PROT_READ | PROT_WRITE;
+			access_type = PROT_READ | PROT_WRITE;
 		else
-			ftype = PROT_READ;
+			access_type = PROT_READ;
 		KERNEL_LOCK();
-		error = uvm_fault(map, trunc_page(va), 0, ftype);
+		error = uvm_fault(map, trunc_page(va), 0, access_type);
 		KERNEL_UNLOCK();
+		if (error == 0)
+			uvm_grow(p, va);
+
 		if (error) {
 #ifdef TRAP_DEBUG
 			printf("type %x dar 0x%lx dsisr 0x%lx %s\r\n",
@@ -214,12 +221,20 @@ trap(struct trapframe *frame)
 		/* FALLTHROUGH */
 
 	case EXC_ISI|EXC_USER:
+		if (!uvm_map_inentry(p, &p->p_spinentry, PROC_STACK(p),
+		    "[%s]%d/%d sp=%lx inside %lx-%lx: not MAP_STACK\n",
+		    uvm_map_inentry_sp, p->p_vmspace->vm_map.sserial))
+			goto out;
+
 		map = &p->p_vmspace->vm_map;
 		va = frame->srr0;
-		ftype = PROT_READ | PROT_EXEC;
+		access_type = PROT_READ | PROT_EXEC;
 		KERNEL_LOCK();
-		error = uvm_fault(map, trunc_page(va), 0, ftype);
+		error = uvm_fault(map, trunc_page(va), 0, access_type);
 		KERNEL_UNLOCK();
+		if (error == 0)
+			uvm_grow(p, va);
+
 		if (error) {
 #ifdef TRAP_DEBUG
 			printf("type %x srr0 0x%lx %s\r\n",
@@ -252,7 +267,7 @@ trap(struct trapframe *frame)
 	case EXC_AST|EXC_USER:
 		p->p_md.md_astpending = 0;
 		uvmexp.softs++;
-		mi_ast(p, ci->ci_want_resched);
+		mi_ast(p, curcpu()->ci_want_resched);
 		break;
 
 	case EXC_ALI|EXC_USER:
@@ -261,9 +276,6 @@ trap(struct trapframe *frame)
 		break;
 
 	case EXC_PGM|EXC_USER:
-		printf("type %x srr0 0x%lx\r\n", type, frame->srr0);
-		dumpframe(frame);
-
 		sv.sival_ptr = (void *)frame->srr0;
 		trapsignal(p, SIGTRAP, 0, TRAP_BRKPT, sv);
 		break;
@@ -273,6 +285,11 @@ trap(struct trapframe *frame)
 			restore_vsx(p);
 		curpcb->pcb_flags |= PCB_FP;
 		frame->srr1 |= PSL_FP;
+		break;
+
+	case EXC_TRC|EXC_USER:
+		sv.sival_ptr = (void *)frame->srr0;
+		trapsignal(p, SIGTRAP, 0, TRAP_TRACE, sv);
 		break;
 
 	case EXC_VEC|EXC_USER:
@@ -296,6 +313,8 @@ out:
 	userret(p);
 }
 
+#ifdef TRAP_DEBUG
+
 #include <machine/opal.h>
 
 void
@@ -312,3 +331,5 @@ dumpframe(struct trapframe *frame)
 	opal_printf("srr0 0x%lx\r\n", frame->srr0);
 	opal_printf("srr1 0x%lx\r\n", frame->srr1);
 }
+
+#endif
