@@ -1,4 +1,4 @@
-/*	$OpenBSD: iked.h,v 1.167 2020/10/03 20:23:08 tobhe Exp $	*/
+/*	$OpenBSD: iked.h,v 1.171 2020/10/30 23:05:39 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -423,6 +423,8 @@ struct iked_sa {
 	unsigned int			 sa_statevalid;	/* IKE_AUTH */
 
 	int				 sa_cp;		/* XXX */
+	struct iked_addr		*sa_cp_addr;	/* requested address */
+	struct iked_addr		*sa_cp_addr6;	/* requested address */
 
 	struct iked_policy		*sa_policy;
 	struct timeval			 sa_timecreated;
@@ -602,6 +604,9 @@ struct iked_message {
 	size_t			 msg_del_cnt;
 	struct ibuf		*msg_del_buf;
 	int			 msg_del_protoid;
+	int			 msg_cp;
+	struct iked_addr	*msg_cp_addr;	/* requested address */
+	struct iked_addr	*msg_cp_addr6;	/* requested address */
 
 	/* MOBIKE */
 	int			 msg_update_sa_addresses;
@@ -632,6 +637,7 @@ struct iked_message {
 #define IKED_MSG_FLAGS_IPCOMP_SUPPORTED			0x0080
 #define IKED_MSG_FLAGS_USE_TRANSPORT			0x0100
 #define IKED_MSG_FLAGS_TEMPORARY_FAILURE		0x0200
+#define IKED_MSG_FLAGS_NO_PROPOSAL_CHOSEN		0x0400
 
 
 struct iked_user {
@@ -1182,7 +1188,7 @@ __dead void fatalx(const char *, ...)
 	    __attribute__((__format__ (printf, 1, 2)));
 
 /* ocsp.c */
-int	 ocsp_connect(struct iked *env, struct imsg *);
+int	 ocsp_connect(struct iked *, struct imsg *);
 int	 ocsp_receive_fd(struct iked *, struct imsg *);
 int	 ocsp_validate_cert(struct iked *, void *, size_t, struct iked_sahdr,
     uint8_t, X509 *);

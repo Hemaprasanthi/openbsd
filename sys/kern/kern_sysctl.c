@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sysctl.c,v 1.379 2020/09/01 01:53:50 gnezdo Exp $	*/
+/*	$OpenBSD: kern_sysctl.c,v 1.381 2020/11/07 05:24:20 gnezdo Exp $	*/
 /*	$NetBSD: kern_sysctl.c,v 1.17 1996/05/20 17:49:05 mrg Exp $	*/
 
 /*-
@@ -938,8 +938,14 @@ sysctl_bounded_arr(const struct sysctl_bounded_args *valpp, u_int valplen,
 		return (ENOTDIR);
 	for (i = 0; i < valplen; ++i) {
 		if (valpp[i].mib == name[0]) {
-			return (sysctl_int_bounded(oldp, oldlenp, newp, newlen,
-			    valpp[i].var, valpp[i].minimum, valpp[i].maximum));
+			if (valpp[i].minimum <= valpp[i].maximum) {
+				return (sysctl_int_bounded(oldp, oldlenp, newp,
+				    newlen, valpp[i].var, valpp[i].minimum,
+				    valpp[i].maximum));
+			} else {
+				return (sysctl_rdint(oldp, oldlenp, newp,
+				    *valpp[i].var));
+			}
 		}
 	}
 	return (EOPNOTSUPP);
@@ -1783,7 +1789,7 @@ sysctl_proc_args(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 	/* Execing - danger. */
 	if ((vpr->ps_flags & PS_INEXEC))
 		return (EBUSY);
-	
+
 	/* Only owner or root can get env */
 	if ((op == KERN_PROC_NENV || op == KERN_PROC_ENV) &&
 	    (vpr->ps_ucred->cr_uid != cp->p_ucred->cr_uid &&
@@ -1792,7 +1798,7 @@ sysctl_proc_args(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 
 	ps_strings = vpr->ps_strings;
 	vm = vpr->ps_vmspace;
-	vm->vm_refcnt++;
+	uvmspace_addref(vm);
 	vpr = NULL;
 
 	buf = malloc(PAGE_SIZE, M_TEMP, M_WAITOK);
