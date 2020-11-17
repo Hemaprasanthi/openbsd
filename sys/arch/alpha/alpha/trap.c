@@ -1,4 +1,4 @@
-/* $OpenBSD: trap.c,v 1.96 2020/10/22 13:41:51 deraadt Exp $ */
+/* $OpenBSD: trap.c,v 1.99 2020/11/07 16:12:20 deraadt Exp $ */
 /* $NetBSD: trap.c,v 1.52 2000/05/24 16:48:33 thorpej Exp $ */
 
 /*-
@@ -376,12 +376,10 @@ trap(a0, a1, a2, entry, framep)
 		case ALPHA_MMCSR_FOR:
 		case ALPHA_MMCSR_FOE:
 		case ALPHA_MMCSR_FOW:
-			KERNEL_LOCK();
 			if (pmap_emulate_reference(p, a0, user, a1)) {
 				access_type = PROT_EXEC;
 				goto do_fault;
 			}
-			KERNEL_UNLOCK();
 			goto out;
 
 		case ALPHA_MMCSR_INVALTRANS:
@@ -404,8 +402,6 @@ trap(a0, a1, a2, entry, framep)
 				access_type = PROT_READ | PROT_WRITE;
 				break;
 			}
-
-			KERNEL_LOCK();
 do_fault:
 			/*
 			 * It is only a kernel address space fault iff:
@@ -427,9 +423,12 @@ do_fault:
 			va = trunc_page((vaddr_t)a0);
 			onfault = p->p_addr->u_pcb.pcb_onfault;
 			p->p_addr->u_pcb.pcb_onfault = 0;
+
+			KERNEL_LOCK();
 			rv = uvm_fault(map, va, 0, access_type);
-			p->p_addr->u_pcb.pcb_onfault = onfault;
 			KERNEL_UNLOCK();
+
+			p->p_addr->u_pcb.pcb_onfault = onfault;
 
 			/*
 			 * If this was a stack access we keep track of the

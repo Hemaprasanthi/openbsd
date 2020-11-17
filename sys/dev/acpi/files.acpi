@@ -1,4 +1,4 @@
-#	$OpenBSD: files.acpi,v 1.57 2020/09/15 18:31:14 mglocker Exp $
+#	$OpenBSD: files.acpi,v 1.60 2020/11/15 18:04:10 patrick Exp $
 #
 # Config file and device description for machine-independent ACPI code.
 # Included by ports that need it.
@@ -50,6 +50,11 @@ device	acpiec
 attach	acpiec at acpi
 file	dev/acpi/acpiec.c		acpiec
 
+# Generic Event
+device	acpige
+attach	acpige at acpi
+file	dev/acpi/acpige.c		acpige
+
 # Thermal Zone
 device	acpitz
 attach	acpitz at acpi
@@ -69,6 +74,11 @@ file	dev/acpi/acpimcfg.c		acpimcfg
 device	acpiprt
 attach	acpiprt at acpi
 file	dev/acpi/acpiprt.c		acpiprt needs-flag
+
+# DMAR device
+device	acpidmar
+attach	acpidmar at acpi
+file	dev/acpi/acpidmar.c		acpidmar needs-flag
 
 # Docking station
 device	acpidock
@@ -145,6 +155,11 @@ file	dev/acpi/chvgpio.c		chvgpio
 device	glkgpio
 attach	glkgpio at acpi
 file	dev/acpi/glkgpio.c		glkgpio
+
+# Intel PCH GPIO
+device	pchgpio
+attach	pchgpio at acpi
+file	dev/acpi/pchgpio.c		pchgpio
 
 # "Intel" Dollar Cove TI PMIC
 device	tipmic
