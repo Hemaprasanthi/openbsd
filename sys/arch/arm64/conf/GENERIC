@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.175 2020/11/09 16:13:57 patrick Exp $
+# $OpenBSD: GENERIC,v 1.179 2020/11/17 14:32:34 patrick Exp $
 #
 # GENERIC machine description file
 #
@@ -40,9 +40,12 @@ smbios0		at efi?
 acpi0		at mainbus?
 acpibtn*	at acpi?
 acpiec*		at acpi?
+acpige*		at acpi?
 acpimcfg*	at acpi?
 acpipci*	at acpi?
 pci*		at acpipci?
+acpipwrres*	at acpi?
+acpitz*		at acpi?
 ahci*		at acpi?
 ccp*		at acpi?		# AMD Cryptographic Co-processor
 com*		at acpi?
@@ -50,6 +53,7 @@ dwiic*		at acpi?
 iic*		at dwiic?
 ipmi*		at acpi?
 pluart*		at acpi?
+sdhc*		at acpi?
 xhci*		at acpi?
 simplebus*	at fdt?
 
@@ -132,6 +136,7 @@ imxgpc*		at fdt?
 imxgpio*	at fdt?
 fec*		at fdt?
 imxuart*	at fdt?
+imxiic*		at acpi?
 imxiic*		at fdt?
 iic*		at imxiic?
 bdpmic*		at iic?

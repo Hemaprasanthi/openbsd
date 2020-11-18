@@ -1,4 +1,4 @@
-/*	$OpenBSD: ikev2.c,v 1.277 2020/11/07 21:22:02 tobhe Exp $	*/
+/*	$OpenBSD: ikev2.c,v 1.284 2020/11/17 18:39:56 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -1086,7 +1086,13 @@ ikev2_init_recv(struct iked *env, struct iked_message *msg,
 		if (ikev2_handle_certreq(env, msg) != 0)
 			return;
 
-		(void)ikev2_init_auth(env, msg);
+		if (ikev2_init_auth(env, msg) != 0) {
+			ikev2_ike_sa_setreason(sa,
+			    "failed to initiate IKE_AUTH exchange");
+			sa_state(env, sa, IKEV2_STATE_CLOSED);
+			msg->msg_sa = NULL;
+			return;
+		}
 		break;
 	case IKEV2_EXCHANGE_IKE_AUTH:
 		if (msg->msg_flags & IKED_MSG_FLAGS_AUTHENTICATION_FAILED) {
@@ -1354,18 +1360,18 @@ ikev2_init_auth(struct iked *env, struct iked_message *msg)
 		return (-1);
 
 	if (ikev2_sa_initiator(env, sa, NULL, msg) == -1) {
-		log_debug("%s: failed to get IKE keys", __func__);
+		log_info("%s: failed to get IKE keys", SPI_SA(sa, __func__));
 		return (-1);
 	}
 
 	if ((authmsg = ikev2_msg_auth(env, sa,
 	    !sa->sa_hdr.sh_initiator)) == NULL) {
-		log_debug("%s: failed to get auth data", __func__);
+		log_info("%s: failed to get auth data", SPI_SA(sa, __func__));
 		return (-1);
 	}
 
 	if (ca_setauth(env, sa, authmsg, PROC_CERT) == -1) {
-		log_debug("%s: failed to get cert", __func__);
+		log_info("%s: failed to get cert", SPI_SA(sa, __func__));
 		ibuf_release(authmsg);
 		return (-1);
 	}
@@ -1392,7 +1398,7 @@ ikev2_init_ike_auth(struct iked *env, struct iked_sa *sa)
 
 	if (!sa->sa_localauth.id_type) {
 		log_debug("%s: no local auth", __func__);
-		return (-1);
+		return (0);
 	}
 
 	/* New encrypted message buffer */
@@ -2242,8 +2248,7 @@ ikev2_add_cp(struct iked *env, struct iked_sa *sa, int type, struct ibuf *buf)
 		case IKEV2_CFG_INTERNAL_IP4_DHCP:
 		case IKEV2_CFG_INTERNAL_IP4_SERVER:
 			/* 4 bytes IPv4 address */
-			in4 = (ikecfg->cfg.address.addr_mask != 32 &&
-			    (ikecfg->cfg_type ==
+			in4 = ((ikecfg->cfg_type ==
 			    IKEV2_CFG_INTERNAL_IP4_ADDRESS) &&
 			    sa->sa_addrpool &&
 			    sa->sa_addrpool->addr_af == AF_INET) ?
@@ -2283,8 +2288,7 @@ ikev2_add_cp(struct iked *env, struct iked_sa *sa, int type, struct ibuf *buf)
 		case IKEV2_CFG_INTERNAL_IP6_ADDRESS:
 		case IKEV2_CFG_INTERNAL_IP6_SUBNET:
 			/* 16 bytes IPv6 address + 1 byte prefix length */
-			in6 = (ikecfg->cfg.address.addr_mask != 128 &&
-			    (ikecfg->cfg_type ==
+			in6 = ((ikecfg->cfg_type ==
 			    IKEV2_CFG_INTERNAL_IP6_ADDRESS) &&
 			    sa->sa_addrpool6 &&
 			    sa->sa_addrpool6->addr_af == AF_INET6) ?
@@ -4522,10 +4526,10 @@ ikev2_resp_create_child_sa(struct iked *env, struct iked_message *msg)
 		}
 
 		/* check KE payload for PFS */
-		if (ibuf_length(msg->msg_parent->msg_ke)) {
+		if (ibuf_length(msg->msg_ke)) {
 			log_debug("%s: using PFS", __func__);
 			if (ikev2_sa_responder_dh(kex, &proposals,
-			    msg->msg_parent, protoid) < 0) {
+			    msg, protoid) < 0) {
 				log_debug("%s: failed to setup DH", __func__);
 				goto fail;
 			}
@@ -6755,6 +6759,10 @@ ikev2_cp_fixaddr(struct iked_sa *sa, struct iked_addr *addr,
 	struct sockaddr_in6	*in6;
 	struct iked_addr	*naddr;
 
+	if (addr->addr_net)
+		return (-1);
+	if (sa->sa_cp == 0)
+		return (-1);
 	switch (addr->addr_af) {
 	case AF_INET:
 		naddr = (sa->sa_cp == IKEV2_CP_REQUEST) ?
