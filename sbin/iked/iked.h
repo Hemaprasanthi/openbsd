@@ -1,4 +1,4 @@
-/*	$OpenBSD: iked.h,v 1.171 2020/10/30 23:05:39 tobhe Exp $	*/
+/*	$OpenBSD: iked.h,v 1.175 2020/11/26 22:24:06 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -320,6 +320,7 @@ struct iked_cipher {
 	int		 encr_fixedkey;	/* Requires fixed key length */
 	struct ibuf	*encr_key;	/* MAC key derived from key seed */
 	struct ibuf	*encr_iv;	/* Initialization Vector */
+	uint64_t	 encr_civ;	/* Counter IV for GCM */
 	size_t		 encr_ivlength;	/* IV length */
 	size_t		 encr_length;	/* Block length */
 	size_t		 encr_saltlength;	/* IV salt length */
@@ -802,12 +803,12 @@ void	 config_free_policy(struct iked *, struct iked_policy *);
 struct iked_proposal *
 	 config_add_proposal(struct iked_proposals *, unsigned int,
 	    unsigned int);
+void	 config_free_proposal(struct iked_proposals *, struct iked_proposal *);
 void	 config_free_proposals(struct iked_proposals *, unsigned int);
 void	 config_free_flows(struct iked *, struct iked_flows *);
 void	 config_free_childsas(struct iked *, struct iked_childsas *,
 	    struct iked_spi *, struct iked_spi *);
-struct iked_transform *
-	 config_add_transform(struct iked_proposal *,
+int	 config_add_transform(struct iked_proposal *,
 	    unsigned int, unsigned int, unsigned int, unsigned int);
 int	 config_setcoupled(struct iked *, unsigned int);
 int	 config_getcoupled(struct iked *, unsigned int);
@@ -852,7 +853,7 @@ void	 policy_ref(struct iked *, struct iked_policy *);
 void	 policy_unref(struct iked *, struct iked_policy *);
 void	 sa_state(struct iked *, struct iked_sa *, int);
 void	 sa_stateflags(struct iked_sa *, unsigned int);
-int	 sa_stateok(struct iked_sa *, int);
+int	 sa_stateok(const struct iked_sa *, int);
 struct iked_sa *
 	 sa_new(struct iked *, uint64_t, uint64_t, unsigned int,
 	    struct iked_policy *);
@@ -950,7 +951,7 @@ struct ibuf *
 	    size_t);
 ssize_t	 ikev2_psk(struct iked_sa *, uint8_t *, size_t, uint8_t **);
 ssize_t	 ikev2_nat_detection(struct iked *, struct iked_message *,
-	    void *, size_t, unsigned int);
+	    void *, size_t, unsigned int, int);
 int	 ikev2_send_informational(struct iked *, struct iked_message *);
 int	 ikev2_send_ike_e(struct iked *, struct iked_sa *, struct ibuf *,
 	    uint8_t, uint8_t, int);
@@ -1028,7 +1029,7 @@ int	 ikev2_pld_parse(struct iked *, struct ike_header *,
 	    struct iked_message *, size_t);
 
 /* eap.c */
-int	 eap_parse(struct iked *, struct iked_sa *, struct iked_message*,
+int	 eap_parse(struct iked *, const struct iked_sa *, struct iked_message*,
 	    void *, int);
 int	 eap_success(struct iked *, struct iked_sa *, int);
 int	 eap_identity_request(struct iked *, struct iked_sa *);

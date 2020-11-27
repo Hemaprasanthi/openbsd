@@ -1,4 +1,4 @@
-/*	$OpenBSD: policy.c,v 1.70 2020/09/09 21:25:42 tobhe Exp $	*/
+/*	$OpenBSD: policy.c,v 1.72 2020/11/25 22:17:14 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2010-2013 Reyk Floeter <reyk@openbsd.org>
@@ -331,7 +331,7 @@ sa_stateflags(struct iked_sa *sa, unsigned int flags)
 }
 
 int
-sa_stateok(struct iked_sa *sa, int state)
+sa_stateok(const struct iked_sa *sa, int state)
 {
 	unsigned int	 require;
 
@@ -862,7 +862,7 @@ proposals_negotiate(struct iked_proposals *result, struct iked_proposals *local,
 
 		if (config_add_transform(prop, chosen[i].xform_type,
 		    chosen[i].xform_id, chosen[i].xform_length,
-		    chosen[i].xform_keylength) == NULL)
+		    chosen[i].xform_keylength) != 0)
 			break;
 	}
 

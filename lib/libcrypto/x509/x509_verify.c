@@ -1,4 +1,4 @@
-/* $OpenBSD: x509_verify.c,v 1.22 2020/11/16 17:43:37 jsing Exp $ */
+/* $OpenBSD: x509_verify.c,v 1.24 2020/11/18 17:54:46 tb Exp $ */
 /*
  * Copyright (c) 2020 Bob Beck <beck@openbsd.org>
  *
@@ -86,7 +86,7 @@ x509_verify_chain_dup(struct x509_verify_chain *chain)
 {
 	struct x509_verify_chain *new_chain;
 
-	if ((new_chain = x509_verify_chain_new()) == NULL)
+	if ((new_chain = calloc(1, sizeof(*chain))) == NULL)
 		goto err;
 	if ((new_chain->certs = X509_chain_up_ref(chain->certs)) == NULL)
 		goto err;
@@ -488,7 +488,6 @@ x509_verify_build_chains(struct x509_verify_ctx *ctx, X509 *cert,
 			ctx->error = (depth == 0) ?
 			    X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT:
 			    X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN;
-
 	}
 
 	for (i = 0; i < sk_X509_num(ctx->roots); i++) {

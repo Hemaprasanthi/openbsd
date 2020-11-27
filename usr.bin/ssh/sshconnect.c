@@ -1,4 +1,4 @@
-/* $OpenBSD: sshconnect.c,v 1.342 2020/11/12 22:56:00 djm Exp $ */
+/* $OpenBSD: sshconnect.c,v 1.345 2020/11/27 00:49:58 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -26,6 +26,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
+#include <limits.h>
 #include <paths.h>
 #include <signal.h>
 #include <pwd.h>
@@ -346,6 +347,10 @@ ssh_create_socket(struct addrinfo *ai)
 		return -1;
 	}
 	fcntl(sock, F_SETFD, FD_CLOEXEC);
+
+	/* Use interactive QOS (if specified) until authentication completed */
+	if (options.ip_qos_interactive != INT_MAX)
+		set_sock_tos(sock, options.ip_qos_interactive);
 
 	/* Bind the socket to an alternative local IP address */
 	if (options.bind_address == NULL && options.bind_interface == NULL)
@@ -751,7 +756,7 @@ hostkeys_find_by_key(const char *host, const char *ip, const struct sshkey *key,
     char **system_hostfiles, u_int num_system_hostfiles,
     char ***names, u_int *nnames)
 {
-	struct find_by_key_ctx ctx = {0};
+	struct find_by_key_ctx ctx = {0, 0, 0, 0, 0};
 	u_int i;
 
 	*names = NULL;
@@ -1144,8 +1149,8 @@ check_host_key(char *hostname, struct sockaddr *hostaddr, u_short port,
 		 */
 		if (options.strict_host_key_checking !=
 		    SSH_STRICT_HOSTKEY_OFF) {
-			error("%s host key for %.200s has changed and you have "
-			    "requested strict checking.", type, host);
+			error("Host key for %.200s has changed and you have "
+			    "requested strict checking.", host);
 			goto fail;
 		}
 
