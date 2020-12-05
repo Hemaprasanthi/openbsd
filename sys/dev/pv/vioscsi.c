@@ -109,7 +109,7 @@ vioscsi_attach(struct device *parent, struct device *self, void *aux)
 	struct vioscsi_softc *sc = (struct vioscsi_softc *)self;
 	struct scsibus_attach_args saa;
 	int i, rv;
-
+	printf("\n\nCMPE %s\n\n\n", __func__);
 	if (vsc->sc_child != NULL) {
 		printf(": parent already has a child\n");
 		return;
