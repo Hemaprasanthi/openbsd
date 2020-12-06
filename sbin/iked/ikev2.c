@@ -1,4 +1,4 @@
-/*	$OpenBSD: ikev2.c,v 1.284 2020/11/17 18:39:56 tobhe Exp $	*/
+/*	$OpenBSD: ikev2.c,v 1.287 2020/11/25 22:17:13 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -925,9 +925,6 @@ ikev2_ike_auth_recv(struct iked *env, struct iked_sa *sa,
 		memcpy(&sa->sa_peerauth, &msg->msg_auth, sizeof(sa->sa_peerauth));
 		bzero(&msg->msg_auth, sizeof(msg->msg_auth));
 	}
-
-	if (msg->msg_cp)
-		sa->sa_cp = msg->msg_cp;
 
 	if (msg->msg_cp) {
 		if (msg->msg_cp_addr) {
@@ -2056,7 +2053,7 @@ ikev2_next_payload(struct ikev2_payload *pld, size_t length,
 
 ssize_t
 ikev2_nat_detection(struct iked *env, struct iked_message *msg,
-    void *ptr, size_t len, unsigned int type)
+    void *ptr, size_t len, unsigned int type, int frompeer)
 {
 	EVP_MD_CTX		 ctx;
 	struct ike_header	*hdr;
@@ -2069,25 +2066,22 @@ ikev2_nat_detection(struct iked *env, struct iked_message *msg,
 	struct sockaddr		*src, *dst, *ss;
 	uint64_t		 rspi, ispi;
 	struct ibuf		*buf;
-	int			 frompeer = 0;
 	uint32_t		 rnd;
 
 	if (ptr == NULL)
 		return (mdlen);
 
-	if (ikev2_msg_frompeer(msg)) {
+	if (frompeer) {
 		buf = msg->msg_parent->msg_data;
 		if ((hdr = ibuf_seek(buf, 0, sizeof(*hdr))) == NULL)
 			return (-1);
 		ispi = hdr->ike_ispi;
 		rspi = hdr->ike_rspi;
-		frompeer = 1;
 		src = (struct sockaddr *)&msg->msg_peer;
 		dst = (struct sockaddr *)&msg->msg_local;
 	} else {
 		ispi = htobe64(sa->sa_hdr.sh_ispi);
 		rspi = htobe64(sa->sa_hdr.sh_rspi);
-		frompeer = 0;
 		src = (struct sockaddr *)&msg->msg_local;
 		dst = (struct sockaddr *)&msg->msg_peer;
 	}
@@ -2175,11 +2169,11 @@ ikev2_add_nat_detection(struct iked *env, struct ibuf *buf,
 	if ((n = ibuf_advance(buf, sizeof(*n))) == NULL)
 		return (-1);
 	n->n_type = htobe16(IKEV2_N_NAT_DETECTION_SOURCE_IP);
-	len = ikev2_nat_detection(env, msg, NULL, 0, 0);
+	len = ikev2_nat_detection(env, msg, NULL, 0, 0, 0);
 	if ((ptr = ibuf_advance(buf, len)) == NULL)
 		return (-1);
 	if ((len = ikev2_nat_detection(env, msg, ptr, len,
-	    betoh16(n->n_type))) == -1)
+	    betoh16(n->n_type), 0)) == -1)
 		return (-1);
 	len += sizeof(*n);
 
@@ -2191,11 +2185,11 @@ ikev2_add_nat_detection(struct iked *env, struct ibuf *buf,
 	if ((n = ibuf_advance(buf, sizeof(*n))) == NULL)
 		return (-1);
 	n->n_type = htobe16(IKEV2_N_NAT_DETECTION_DESTINATION_IP);
-	len = ikev2_nat_detection(env, msg, NULL, 0, 0);
+	len = ikev2_nat_detection(env, msg, NULL, 0, 0, 0);
 	if ((ptr = ibuf_advance(buf, len)) == NULL)
 		return (-1);
 	if ((len = ikev2_nat_detection(env, msg, ptr, len,
-	    betoh16(n->n_type))) == -1)
+	    betoh16(n->n_type), 0)) == -1)
 		return (-1);
 	len += sizeof(*n);
 	return (len);
@@ -2526,11 +2520,9 @@ ikev2_resp_informational(struct iked *env, struct iked_sa *sa,
 {
 	struct ikev2_notify		*n;
 	struct ikev2_payload		*pld = NULL;
-	struct ike_header		*hdr;
 	struct ibuf			*buf = NULL;
 	ssize_t				 len = 0;
 	int				 ret = -1;
-	int				 oflags = 0;
 	uint8_t				 firstpayload = IKEV2_PAYLOAD_NONE;
 
 	if (!sa_stateok(sa, IKEV2_STATE_AUTH_REQUEST) ||
@@ -2550,24 +2542,8 @@ ikev2_resp_informational(struct iked *env, struct iked_sa *sa,
 	 */
 	if (sa->sa_mobike &&
 	    (msg->msg_update_sa_addresses || msg->msg_natt_rcvd)) {
-		/*
-		 * XXX workaround so ikev2_msg_frompeer() fails for
-		 * XXX ikev2_nat_detection(), and the correct src/dst are
-		 * XXX used for the nat detection payload.
-		 */
-		if (msg->msg_parent == NULL)
-			goto done;
-		if ((hdr = ibuf_seek(msg->msg_parent->msg_data, 0,
-		    sizeof(*hdr))) == NULL)
-			goto done;
-		oflags = hdr->ike_flags;
-		if (sa->sa_hdr.sh_initiator)
-			hdr->ike_flags |= IKEV2_FLAG_INITIATOR;
-		else
-			hdr->ike_flags &= ~IKEV2_FLAG_INITIATOR;
 		/* NAT-T notify payloads */
 		len = ikev2_add_nat_detection(env, buf, &pld, msg, len);
-		hdr->ike_flags = oflags;	/* XXX undo workaround */
 		if (len == -1)
 			goto done;
 		firstpayload = IKEV2_PAYLOAD_NOTIFY;
@@ -3704,7 +3680,7 @@ ikev2_set_sa_proposal(struct iked_sa *sa, struct iked_policy *pol,
 			xform = &prop->prop_xforms[i];
 			if (config_add_transform(copy, xform->xform_type,
 			    xform->xform_id, xform->xform_length,
-			    xform->xform_keylength) == NULL)
+			    xform->xform_keylength) != 0)
 				return (-1);
 		}
 	}

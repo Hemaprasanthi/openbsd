@@ -1,4 +1,4 @@
-/*	$OpenBSD: ikev2_pld.c,v 1.108 2020/10/29 21:49:58 tobhe Exp $	*/
+/*	$OpenBSD: ikev2_pld.c,v 1.114 2020/11/25 22:17:14 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -167,7 +167,7 @@ ikev2_validate_pld(struct iked_message *msg, size_t offset, size_t left,
 	}
 	/*
 	 * Sanity check the specified payload size, it must
-	 * be at last the size of the generic payload header.
+	 * be at least the size of the generic payload header.
 	 */
 	if (pld_length < sizeof(*pld)) {
 		log_debug("%s: malformed payload: shorter than minimum "
@@ -345,6 +345,7 @@ ikev2_pld_sa(struct iked *env, struct ikev2_payload *pld,
 	uint32_t			 spi32;
 	uint64_t			 spi = 0, spi64;
 	uint8_t				*msgbuf = ibuf_data(msg->msg_data);
+	int				 r;
 	struct iked_proposals		*props;
 	size_t				 total;
 
@@ -430,10 +431,20 @@ ikev2_pld_sa(struct iked *env, struct ikev2_payload *pld,
 		/*
 		 * Parse the attached transforms
 		 */
-		if (sap.sap_transforms &&
-		    ikev2_pld_xform(env, msg, offset, total) != 0) {
-			log_debug("%s: invalid proposal transforms", __func__);
-			return (-1);
+		if (sap.sap_transforms) {
+			r = ikev2_pld_xform(env, msg, offset, total);
+			if ((r == -2) && ikev2_msg_frompeer(msg)) {
+				log_debug("%s: invalid proposal transform",
+				    __func__);
+
+				/* cleanup and ignore proposal */
+				config_free_proposal(props, prop);
+				prop = msg->msg_parent->msg_prop = NULL;
+			} else if (r != 0) {
+				log_debug("%s: invalid proposal transforms",
+				    __func__);
+				return (-1);
+			}
 		}
 
 		offset += total;
@@ -479,6 +490,7 @@ ikev2_pld_xform(struct iked *env, struct iked_message *msg,
 	struct ikev2_transform		 xfrm;
 	char				 id[BUFSIZ];
 	int				 ret = 0;
+	int				 r;
 	size_t				 xfrm_length;
 
 	if (ikev2_validate_xform(msg, offset, total, &xfrm))
@@ -529,11 +541,17 @@ ikev2_pld_xform(struct iked *env, struct iked_message *msg,
 	}
 
 	if (ikev2_msg_frompeer(msg)) {
-		if (config_add_transform(msg->msg_parent->msg_prop,
+		r = config_add_transform(msg->msg_parent->msg_prop,
 		    xfrm.xfrm_type, betoh16(xfrm.xfrm_id),
-		    msg->msg_attrlength, msg->msg_attrlength) == NULL) {
-			log_debug("%s: failed to add transform", __func__);
-			return (-1);
+		    msg->msg_attrlength, msg->msg_attrlength);
+		if (r == -1) {
+			log_debug("%s: failed to add transform: alloc error",
+			    __func__);
+			return (r);
+		} else if (r == -2) {
+			log_debug("%s: failed to add transform: unknown type",
+			    __func__);
+			return (r);
 		}
 	}
 
@@ -707,7 +725,7 @@ ikev2_pld_id(struct iked *env, struct ikev2_payload *pld,
 	struct ikev2_id			 id;
 	size_t				 len;
 	struct iked_id			*idp, idb;
-	struct iked_sa			*sa = msg->msg_sa;
+	const struct iked_sa		*sa = msg->msg_sa;
 	uint8_t				*msgbuf = ibuf_data(msg->msg_data);
 	char				 idstr[IKED_ID_SIZE];
 
@@ -784,6 +802,7 @@ ikev2_pld_cert(struct iked *env, struct ikev2_payload *pld,
 	size_t				 len;
 	struct iked_id			*certid;
 	uint8_t				*msgbuf = ibuf_data(msg->msg_data);
+	const struct iked_sa		*sa = msg->msg_sa;
 
 	if (ikev2_validate_cert(msg, offset, left, &cert))
 		return (-1);
@@ -803,7 +822,7 @@ ikev2_pld_cert(struct iked *env, struct ikev2_payload *pld,
 	certid = &msg->msg_parent->msg_cert;
 	if (certid->id_type) {
 		log_info("%s: multiple cert payloads not supported",
-		   SPI_SA(msg->msg_sa, __func__));
+		   SPI_SA(sa, __func__));
 		return (-1);
 	}
 
@@ -998,6 +1017,7 @@ ikev2_pld_notify(struct iked *env, struct ikev2_payload *pld,
     struct iked_message *msg, size_t offset, size_t left)
 {
 	struct ikev2_notify	 n;
+	const struct iked_sa	*sa = msg->msg_sa;
 	uint8_t			*buf, md[SHA_DIGEST_LENGTH];
 	uint32_t		 spi32;
 	uint64_t		 spi64;
@@ -1031,7 +1051,8 @@ ikev2_pld_notify(struct iked *env, struct ikev2_payload *pld,
 			    " (%zu != %zu)", __func__, left, sizeof(md));
 			return (-1);
 		}
-		if (ikev2_nat_detection(env, msg, md, sizeof(md), type) == -1)
+		if (ikev2_nat_detection(env, msg, md, sizeof(md), type,
+		     ikev2_msg_frompeer(msg)) == -1)
 			return (-1);
 		if (memcmp(buf, md, left) != 0) {
 			log_debug("%s: %s detected NAT", __func__,
@@ -1058,15 +1079,15 @@ ikev2_pld_notify(struct iked *env, struct ikev2_payload *pld,
 		 * AUTHENTICATION_FAILED from authenticated peers.
 		 * If we are the initiator, the peer cannot be authenticated.
 		 */
-		if (!msg->msg_sa->sa_hdr.sh_initiator) {
-			if (!sa_stateok(msg->msg_sa, IKEV2_STATE_VALID)) {
+		if (!sa->sa_hdr.sh_initiator) {
+			if (!sa_stateok(sa, IKEV2_STATE_VALID)) {
 				log_debug("%s: ignoring AUTHENTICATION_FAILED"
 				    " from unauthenticated initiator",
 				    __func__);
 				return (-1);
 			}
 		} else {
-			if (sa_stateok(msg->msg_sa, IKEV2_STATE_VALID)) {
+			if (sa_stateok(sa, IKEV2_STATE_VALID)) {
 				log_debug("%s: ignoring AUTHENTICATION_FAILED"
 				    " from authenticated responder",
 				    __func__);
@@ -1077,7 +1098,7 @@ ikev2_pld_notify(struct iked *env, struct ikev2_payload *pld,
 		    |= IKED_MSG_FLAGS_AUTHENTICATION_FAILED;
 		break;
 	case IKEV2_N_INVALID_KE_PAYLOAD:
-		if (sa_stateok(msg->msg_sa, IKEV2_STATE_VALID) &&
+		if (sa_stateok(sa, IKEV2_STATE_VALID) &&
 		    !msg->msg_e) {
 			log_debug("%s: INVALID_KE_PAYLOAD not encrypted",
 			    __func__);
@@ -1220,7 +1241,7 @@ ikev2_pld_notify(struct iked *env, struct ikev2_payload *pld,
 			    __func__);
 			return (-1);
 		}
-		if (!msg->msg_sa->sa_mobike) {
+		if (!sa->sa_mobike) {
 			log_debug("%s: ignoring update sa addresses"
 			    " notification w/o mobike: %zu", __func__, left);
 			return (0);
@@ -1238,7 +1259,7 @@ ikev2_pld_notify(struct iked *env, struct ikev2_payload *pld,
 			    __func__);
 			return (-1);
 		}
-		if (!msg->msg_sa->sa_mobike) {
+		if (!sa->sa_mobike) {
 			log_debug("%s: ignoring cookie2 notification"
 			    " w/o mobike: %zu", __func__, left);
 			return (0);
@@ -1295,11 +1316,15 @@ ikev2_pld_notify(struct iked *env, struct ikev2_payload *pld,
 			    __func__);
 			return (-1);
 		}
-		if (msg->msg_sa == NULL ||
-		    msg->msg_sa->sa_sigsha2) {
-			log_debug("%s: SIGNATURE_HASH_ALGORITHMS: no SA or "
-			    "duplicate notify", __func__);
+		if (sa == NULL) {
+			log_debug("%s: SIGNATURE_HASH_ALGORITHMS: no SA",
+			    __func__);
 			return (-1);
+		}
+		if (sa->sa_sigsha2) {
+			log_debug("%s: SIGNATURE_HASH_ALGORITHMS: "
+			    "duplicate notify", __func__);
+			return (0);
 		}
 		if (left < sizeof(signature_hash) ||
 		    left % sizeof(signature_hash)) {
@@ -1944,7 +1969,7 @@ ikev2_pld_eap(struct iked *env, struct ikev2_payload *pld,
 {
 	struct eap_header		 hdr;
 	struct eap_message		*eap = NULL;
-	struct iked_sa			*sa = msg->msg_sa;
+	const struct iked_sa		*sa = msg->msg_sa;
 	size_t				 len;
 
 	if (ikev2_validate_eap(msg, offset, left, &hdr))
