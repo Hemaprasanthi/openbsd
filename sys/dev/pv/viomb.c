@@ -183,6 +183,8 @@ viomb_match(struct device *parent, void *match, void *aux)
 void
 viomb_attach(struct device *parent, struct device *self, void *aux)
 {
+
+	printf("\n\n\n I am in Virtio Balloon Device \n\n\n");
 	printf("%s - attaching viomb cmpe\n",__func__);
 	struct viomb_softc *sc = (struct viomb_softc *)self;
 	struct virtio_softc *vsc = (struct virtio_softc *)parent;

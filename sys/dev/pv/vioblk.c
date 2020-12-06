@@ -167,6 +167,7 @@ int vioblk_match(struct device *parent, void *match, void *aux)
 void
 vioblk_attach(struct device *parent, struct device *self, void *aux)
 {
+	printf("\n\n\n I am in Virtio Block Device \n\n\n");
 	struct vioblk_softc *sc = (struct vioblk_softc *)self;
 	struct virtio_softc *vsc = (struct virtio_softc *)parent;
 	struct scsibus_attach_args saa;
