@@ -138,9 +138,9 @@ In file openbsd/sys/dev/fdt/files.fdt uncomment the lines:
 
 device rkdrm: drmbase, wsemuldisplaydev, rasops15, rasops16, rasops24, rasops32
 
- attach rkdrm at fdt
- file dev/fdt/rkdrm.c rkdrm
- file dev/pci/drm/drm_gem_cma_helper.c rkdrm
+ ######### attach rkdrm at fdt
+ ######## file dev/fdt/rkdrm.c rkdrm
+ ######### file dev/pci/drm/drm_gem_cma_helper.c rkdrm
 
 ### Qemu logs as a host emulating arm64 hardware
 ![Alt text](https://github.com/Hemaprasanthi/openbsd/blob/master/Host(Qemu)%20Logs.png?raw=true "Qemu logs as a host emulating arm64 hardware")
