@@ -141,9 +141,7 @@ attach rkdrm at fdt
 file dev/fdt/rkdrm.c rkdrm
 file dev/pci/drm/drm_gem_cma_helper.c rkdrm
 
-![Alt text] https://github.com/Hemaprasanthi/openbsd/blob/master/Host(Qemu)%20Logs.png
-
-
+![Alt text](https://github.com/Hemaprasanthi/openbsd/blob/master/Host(Qemu)%20Logs.png?raw=true "Title")
 
 
 
