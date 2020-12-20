@@ -1,13 +1,13 @@
 # openbsd
-## Procedure to test Virtio viomb device and driver stats queue functionality on arm64 device
+# Procedure to test Virtio viomb device and driver stats queue functionality on arm64 device
 
 Note: Viomb device is also called as memory ballooning
-Step 1: Download pre-reqs
+## Step 1: Download pre-reqs
 Download 
 1. miniroot68.img
 2. QEMU_EFI.fd
 from https://0x16h.github.io/OpenBSD_arm64_qemu.html
-Step 2: Create guest VM
+## Step 2: Create guest VM
 In first terminal execute the following command:
 Command 1: apt update && install qemu virt-manager
 Now create a root.qcow2 file using command 2
@@ -25,7 +25,7 @@ Give permission to go.sh file
 Command 4: chmod +x go.sh
 Execute the file
 Command 5: ./go.sh
-Step 3: Boot guest VM
+## Step 3: Boot guest VM
 In second terminal 
 Command 6: telnet localhost 4450
 Other than the below questions just press enter whenever prompted for an answer
@@ -43,7 +43,7 @@ Note: To take a break, we can stop the environment by ctrl+C in the first termin
  To again start the project:
 In first terminal execute the command 5 (ie., running the go.sh file if you are doing for the first time otherwise you can run godel.sh file)
 
-Step 4: Optimization
+## Step 4: Optimization
 Stop the first terminal by (ctrl+C) and execute the following commands:
 Command 7: cp go.sh godel.sh
 Replace the text in godel.sh by following:
@@ -53,7 +53,7 @@ qemu-system-aarch64 -m 2048 -M virt -cpu cortex-a57 -bios QEMU_EFI.fd -device vi
 
 Command 8:  chmod +x godel.sh
 Command 9: ./godel.sh
-Step 5: Attach Viomb device
+## Step 5: Attach Viomb device
 Now we need to tell Qemu to attach the virtio balloon device in the .sh script so let’s append the below 
 script at the end of the godel.sh script after a space.
 -device virtio-balloon-pci -net nic,model=rtl8139
@@ -62,11 +62,11 @@ The content of godel-balloon.sh file is below:
 
 #!/bin/sh
 qemu-system-aarch64 -m 2048 -M virt -cpu cortex-a57 -bios QEMU_EFI.fd -device virtio-rng-device -net user -drive file=root.qcow2,if=none,id=drive0,format=qcow2 -device virtio-blk-device,drive=drive0 -nographic -serial tcp::4450,server,telnet,wait -netdev user,id=net0 -device virtio-net-device,netdev=net0 -device virtio-balloon-pci -net nic,model=rtl8139
-Step 6: Analyze logs in guest VM
+## Step 6: Analyze logs in guest VM
 Run qemu using godel-balloon.sh in the first terminal, forget about go.sh and godel.sh.
 In the second terminal execute command 6. While booting give bsd0 since we compiled the our code into bsd0.
 Logs related to balloon is attached give in the viomb_attach functions, and stats queue is initiated and empty req is placed by the driver with all the 6 tags are set to 0x0, all these logs will be visible while booting. So now we successfully initialized an empty stats queue in guest openbsd running on qemu which emulate the arm64 hardware.
-Step 7: Debug from Qemu
+## Step 7: Debug from Qemu
 Let’s verify the logic of obtaining the guest statistics using stats queue from device side.  For this the device has to make a request. 
 stats_poll interval needs to be more than zero to put a request in stats queue hence this need to be set. Here we are doing it manually i.e., giving a hard coded value to test.
 
@@ -103,13 +103,14 @@ Command 27: ./godel-balloon.sh
 Execute command 6 in the second terminal
 
  
-References:
-1.	https://github.com/Hemaprasanthi/openbsd
-2.	https://github.com/Hemaprasanthi/qemu
-3.	https://github.com/Hemaprasanthi/OpenBSD-Deliverables/tree/master/
+# References:
+1. https://github.com/mlarkin2015/openbsd
+2. https://github.com/Hemaprasanthi/openbsd
+3.	https://github.com/Hemaprasanthi/qemu
+4.	https://github.com/Hemaprasanthi/OpenBSD-Deliverables/tree/master/
 
  
-ERRORS AND SOLUTIONS:
+# ERRORS AND SOLUTIONS:
 How to resolve RKDRM error?
 
 Error:
