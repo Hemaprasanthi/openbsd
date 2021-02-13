@@ -1,4 +1,4 @@
-/*	$OpenBSD: route.c,v 1.250 2020/11/25 21:36:05 krw Exp $	*/
+/*	$OpenBSD: route.c,v 1.252 2021/01/24 08:58:50 florian Exp $	*/
 /*	$NetBSD: route.c,v 1.16 1996/04/15 18:27:05 cgd Exp $	*/
 
 /*
@@ -506,7 +506,8 @@ setsource(int argc, char **argv)
 		for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
 			if (if_nametoindex(ifa->ifa_name) != ifindex)
 				continue;
-			if (!(ifa->ifa_addr->sa_family == AF_INET ||
+			if (ifa->ifa_addr == NULL ||
+			    !(ifa->ifa_addr->sa_family == AF_INET ||
 			    ifa->ifa_addr->sa_family == AF_INET6))
 				continue;
 			if ((af != AF_UNSPEC) &&
@@ -973,6 +974,7 @@ getaddr(int which, int af, char *s, struct hostent **hpp)
 			errx(1, "%s: resolved to multiple values", s);
 		memcpy(&su->sin6, res->ai_addr, sizeof(su->sin6));
 		freeaddrinfo(res);
+#ifdef __KAME__
 		if ((IN6_IS_ADDR_LINKLOCAL(&su->sin6.sin6_addr) ||
 		     IN6_IS_ADDR_MC_LINKLOCAL(&su->sin6.sin6_addr) ||
 		     IN6_IS_ADDR_MC_INTFACELOCAL(&su->sin6.sin6_addr)) &&
@@ -981,6 +983,7 @@ getaddr(int which, int af, char *s, struct hostent **hpp)
 				htons(su->sin6.sin6_scope_id);
 			su->sin6.sin6_scope_id = 0;
 		}
+#endif
 		if (hints.ai_flags == AI_NUMERICHOST) {
 			if (which == RTA_DST) {
 				if (sep == NULL && su->sin6.sin6_scope_id == 0 &&

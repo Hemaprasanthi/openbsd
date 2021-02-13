@@ -1,4 +1,4 @@
-/*	$OpenBSD: dhcpd.h,v 1.288 2020/11/06 21:53:55 krw Exp $	*/
+/*	$OpenBSD: dhcpd.h,v 1.291 2021/02/01 01:42:20 krw Exp $	*/
 
 /*
  * Copyright (c) 2004 Henning Brauer <henning@openbsd.org>
@@ -135,7 +135,7 @@ struct interface_info {
 	struct dhcp_packet	 sent_packet;
 	int			 sent_packet_length;
 	uint32_t		 xid;
-	time_t			 timeout;
+	struct timespec		 timeout;
 	time_t			 expiry, rebind;
 	void			(*timeout_func)(struct interface_info *);
 	uint16_t		 secs;
@@ -215,8 +215,6 @@ extern int			 cmd_opts;
 #define		OPT_VERBOSE	0x02
 #define		OPT_FOREGROUND	0x04
 #define		OPT_RELEASE	0x08
-#define		OPT_CONFPATH	0x10
-#define		OPT_IGNORELIST	0x40
 
 void		 dhcpoffer(struct interface_info *, struct option_data *,
     const char *);
@@ -241,7 +239,7 @@ uint32_t	 wrapsum(uint32_t);
 
 /* clparse.c */
 void		 init_config(void);
-void		 read_conf(char *, char *, struct ether_addr *);
+void		 read_conf(char *, uint8_t *, struct ether_addr *);
 void		 read_lease_db(struct client_lease_tq *);
 
 /* kroute.c */

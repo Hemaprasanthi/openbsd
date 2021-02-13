@@ -1,4 +1,4 @@
-/*	$OpenBSD: mft.c,v 1.19 2020/11/06 04:22:18 tb Exp $ */
+/*	$OpenBSD: mft.c,v 1.25 2021/02/04 08:58:19 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -17,6 +17,7 @@
 
 #include <assert.h>
 #include <err.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <fcntl.h>
@@ -24,7 +25,9 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <openssl/asn1.h>
 #include <openssl/sha.h>
+#include <openssl/x509.h>
 
 #include "extern.h"
 
@@ -168,16 +171,6 @@ mft_parse_filehash(struct parse *p, const ASN1_OCTET_STRING *os)
 	} else if ((sz = strlen(fn)) <= 4) {
 		warnx("%s: filename must be large enough for suffix part: %s",
 		    p->fn, fn);
-		goto out;
-	}
-
-	if (strcasecmp(fn + sz - 4, ".roa") &&
-	    strcasecmp(fn + sz - 4, ".crl") &&
-	    strcasecmp(fn + sz - 4, ".cer")) {
-		/* ignore unknown files */
-		free(fn);
-		fn = NULL;
-		rc = 1;
 		goto out;
 	}
 
@@ -393,7 +386,7 @@ mft_parse(X509 **x509, const char *fn)
 	p.fn = fn;
 
 	cms = cms_parse_validate(x509, fn, "1.2.840.113549.1.9.16.1.26",
-	    NULL, &cmsz);
+	    &cmsz);
 	if (cms == NULL)
 		return NULL;
 	assert(*x509 != NULL);
@@ -457,6 +450,7 @@ mft_validfilehash(const char *fn, const struct mftfile *m)
 	/* Check hash of file now, but first build path for it */
 	cp = strrchr(fn, '/');
 	assert(cp != NULL);
+	assert(cp - fn < INT_MAX);
 	if (asprintf(&path, "%.*s/%s", (int)(cp - fn), fn, m->file) == -1)
 		err(1, "asprintf");
 
@@ -527,22 +521,21 @@ mft_free(struct mft *p)
  * See mft_read() for the other side of the pipe.
  */
 void
-mft_buffer(char **b, size_t *bsz, size_t *bmax, const struct mft *p)
+mft_buffer(struct ibuf *b, const struct mft *p)
 {
 	size_t		 i;
 
-	io_simple_buffer(b, bsz, bmax, &p->stale, sizeof(int));
-	io_str_buffer(b, bsz, bmax, p->file);
-	io_simple_buffer(b, bsz, bmax, &p->filesz, sizeof(size_t));
+	io_simple_buffer(b, &p->stale, sizeof(int));
+	io_str_buffer(b, p->file);
+	io_simple_buffer(b, &p->filesz, sizeof(size_t));
 
 	for (i = 0; i < p->filesz; i++) {
-		io_str_buffer(b, bsz, bmax, p->files[i].file);
-		io_simple_buffer(b, bsz, bmax,
-			p->files[i].hash, SHA256_DIGEST_LENGTH);
+		io_str_buffer(b, p->files[i].file);
+		io_simple_buffer(b, p->files[i].hash, SHA256_DIGEST_LENGTH);
 	}
 
-	io_str_buffer(b, bsz, bmax, p->aki);
-	io_str_buffer(b, bsz, bmax, p->ski);
+	io_str_buffer(b, p->aki);
+	io_str_buffer(b, p->ski);
 }
 
 /*
@@ -560,6 +553,7 @@ mft_read(int fd)
 
 	io_simple_read(fd, &p->stale, sizeof(int));
 	io_str_read(fd, &p->file);
+	assert(p->file);
 	io_simple_read(fd, &p->filesz, sizeof(size_t));
 
 	if ((p->files = calloc(p->filesz, sizeof(struct mftfile))) == NULL)
@@ -572,5 +566,7 @@ mft_read(int fd)
 
 	io_str_read(fd, &p->aki);
 	io_str_read(fd, &p->ski);
+	assert(p->aki && p->ski);
+
 	return p;
 }

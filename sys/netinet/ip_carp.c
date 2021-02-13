@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_carp.c,v 1.349 2020/07/28 16:44:34 yasuoka Exp $	*/
+/*	$OpenBSD: ip_carp.c,v 1.352 2021/02/08 12:30:10 bluhm Exp $	*/
 
 /*
  * Copyright (c) 2002 Michael Shalayeff. All rights reserved.
@@ -786,10 +786,7 @@ carp_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 void
 carpattach(int n)
 {
-	struct ifg_group	*ifg;
-
-	if ((ifg = if_creategroup("carp")) != NULL)
-		ifg->ifg_refcnt++;	/* keep around even if empty */
+	if_creategroup("carp");  /* keep around even if empty */
 	if_clone_attach(&carp_cloner);
 	carpcounters = counters_alloc(carps_ncounters);
 }
@@ -2021,16 +2018,19 @@ carp_ioctl(struct ifnet *ifp, u_long cmd, caddr_t addr)
 			break;
 		error = 1;
 		if (carpr.carpr_carpdev[0] != '\0' &&
-		    (ifp0 = ifunit(carpr.carpr_carpdev)) == NULL)
+		    (ifp0 = if_unit(carpr.carpr_carpdev)) == NULL)
 			return (EINVAL);
 		if (carpr.carpr_peer.s_addr == 0)
 			sc->sc_peer.s_addr = INADDR_CARP_GROUP;
 		else
 			sc->sc_peer.s_addr = carpr.carpr_peer.s_addr;
 		if (ifp0 != NULL && ifp0->if_index != sc->sc_carpdevidx) {
-			if ((error = carp_set_ifp(sc, ifp0)))
+			if ((error = carp_set_ifp(sc, ifp0))) {
+				if_put(ifp0);
 				return (error);
+			}
 		}
+		if_put(ifp0);
 		if (vhe->state != INIT && carpr.carpr_state != vhe->state) {
 			switch (carpr.carpr_state) {
 			case BACKUP:
@@ -2282,10 +2282,8 @@ carp_transmit(struct carp_softc *sc, struct ifnet *ifp0, struct mbuf *m)
 #if NBPFILTER > 0
 	{
 		caddr_t if_bpf = ifp->if_bpf;
-		if (if_bpf) {
-			if (bpf_mtap_ether(if_bpf, m, BPF_DIRECTION_OUT))
-				m_freem(m);
-		}
+		if (if_bpf)
+			bpf_mtap_ether(if_bpf, m, BPF_DIRECTION_OUT);
 	}
 #endif /* NBPFILTER > 0 */
 

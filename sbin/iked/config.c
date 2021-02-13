@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.73 2020/11/25 22:17:13 tobhe Exp $	*/
+/*	$OpenBSD: config.c,v 1.76 2021/02/08 16:13:58 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -84,8 +84,7 @@ config_free_kex(struct iked_kex *kex)
 	ibuf_release(kex->kex_inonce);
 	ibuf_release(kex->kex_rnonce);
 
-	if (kex->kex_dhgroup != NULL)
-		group_free(kex->kex_dhgroup);
+	group_free(kex->kex_dhgroup);
 	ibuf_release(kex->kex_dhiexchange);
 	ibuf_release(kex->kex_dhrexchange);
 
@@ -140,8 +139,7 @@ config_free_sa(struct iked *env, struct iked_sa *sa)
 	ibuf_release(sa->sa_inonce);
 	ibuf_release(sa->sa_rnonce);
 
-	if (sa->sa_dhgroup != NULL)
-		group_free(sa->sa_dhgroup);
+	group_free(sa->sa_dhgroup);
 	ibuf_release(sa->sa_dhiexchange);
 	ibuf_release(sa->sa_dhrexchange);
 
@@ -408,7 +406,7 @@ config_add_transform(struct iked_proposal *prop, unsigned int type,
 }
 
 struct iked_transform *
-config_findtransform(struct iked_proposals *props, uint8_t type,
+config_findtransform_ext(struct iked_proposals *props, uint8_t type, int id,
     unsigned int proto)
 {
 	struct iked_proposal	*prop;
@@ -422,12 +420,22 @@ config_findtransform(struct iked_proposals *props, uint8_t type,
 			continue;
 		for (i = 0; i < prop->prop_nxforms; i++) {
 			xform = prop->prop_xforms + i;
+			/* optional lookup of specific transform */
+			if (id >= 0 && xform->xform_id != id)
+				continue;
 			if (xform->xform_type == type)
 				return (xform);
 		}
 	}
 
 	return (NULL);
+}
+
+struct iked_transform *
+config_findtransform(struct iked_proposals *props, uint8_t type,
+    unsigned int proto)
+{
+	return config_findtransform_ext(props, type, -1, proto);
 }
 
 struct iked_user *
@@ -523,14 +531,14 @@ config_getreset(struct iked *env, struct imsg *imsg)
 	IMSG_SIZE_CHECK(imsg, &mode);
 	memcpy(&mode, imsg->data, sizeof(mode));
 
-	if (mode == RESET_ALL || mode == RESET_POLICY) {
+	if (mode == RESET_EXIT || mode == RESET_ALL || mode == RESET_POLICY) {
 		log_debug("%s: flushing policies", __func__);
 		TAILQ_FOREACH_SAFE(pol, &env->sc_policies, pol_entry, poltmp) {
 			config_free_policy(env, pol);
 		}
 	}
 
-	if (mode == RESET_ALL || mode == RESET_SA) {
+	if (mode == RESET_EXIT || mode == RESET_ALL || mode == RESET_SA) {
 		log_debug("%s: flushing SAs", __func__);
 		while ((sa = RB_MIN(iked_sas, &env->sc_sas))) {
 			/* for RESET_SA we try send a DELETE */
@@ -544,13 +552,16 @@ config_getreset(struct iked *env, struct imsg *imsg)
 		}
 	}
 
-	if (mode == RESET_ALL || mode == RESET_USER) {
+	if (mode == RESET_EXIT || mode == RESET_ALL || mode == RESET_USER) {
 		log_debug("%s: flushing users", __func__);
 		while ((usr = RB_MIN(iked_users, &env->sc_users))) {
 			RB_REMOVE(iked_users, &env->sc_users, usr);
 			free(usr);
 		}
 	}
+
+	if (mode == RESET_EXIT)
+		proc_compose(&env->sc_ps, PROC_PARENT, IMSG_CTL_EXIT, NULL, 0);
 
 	return (0);
 }
@@ -880,6 +891,8 @@ config_getstatic(struct iked *env, struct imsg *imsg)
 	log_debug("%s: %sfragmentation", __func__, env->sc_frag ? "" : "no ");
 	log_debug("%s: %smobike", __func__, env->sc_mobike ? "" : "no ");
 	log_debug("%s: nattport %u", __func__, env->sc_nattport);
+	log_debug("%s: %sstickyaddress", __func__,
+	    env->sc_stickyaddress ? "" : "no ");
 
 	return (0);
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: smtpd.h,v 1.659 2020/09/23 19:11:50 martijn Exp $	*/
+/*	$OpenBSD: smtpd.h,v 1.661 2021/01/19 09:16:20 claudio Exp $	*/
 
 /*
  * Copyright (c) 2008 Gilles Chehade <gilles@poolp.org>
@@ -345,7 +345,7 @@ enum smtp_proc_type {
 	PROC_QUEUE,
 	PROC_CONTROL,
 	PROC_SCHEDULER,
-	PROC_PONY,
+	PROC_DISPATCHER,
 	PROC_CA,
 	PROC_PROCESSOR,
 	PROC_CLIENT,
@@ -1007,7 +1007,7 @@ extern struct mproc *p_parent;
 extern struct mproc *p_lka;
 extern struct mproc *p_queue;
 extern struct mproc *p_scheduler;
-extern struct mproc *p_pony;
+extern struct mproc *p_dispatcher;
 extern struct mproc *p_ca;
 
 extern struct smtpd	*env;
@@ -1579,9 +1579,9 @@ struct scheduler_backend *scheduler_backend_lookup(const char *);
 void scheduler_info(struct scheduler_info *, struct envelope *);
 
 
-/* pony.c */
-int pony(void);
-void pony_imsg(struct mproc *, struct imsg *);
+/* dispatcher.c */
+int dispatcher(void);
+void dispatcher_imsg(struct mproc *, struct imsg *);
 
 
 /* resolver.c */
@@ -1687,7 +1687,7 @@ const char *ss_to_text(const struct sockaddr_storage *);
 const char *time_to_text(time_t);
 const char *duration_to_text(time_t);
 const char *rule_to_text(struct rule *);
-const char *sockaddr_to_text(struct sockaddr *);
+const char *sockaddr_to_text(const struct sockaddr *);
 const char *mailaddr_to_text(const struct mailaddr *);
 const char *expandnode_to_text(struct expandnode *);
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: proc.h,v 1.301 2020/11/10 17:26:54 cheloha Exp $	*/
+/*	$OpenBSD: proc.h,v 1.308 2021/02/08 10:51:02 mpi Exp $	*/
 /*	$NetBSD: proc.h,v 1.44 1996/04/22 01:23:21 christos Exp $	*/
 
 /*-
@@ -212,7 +212,8 @@ struct process {
 	u_int	ps_xexit;		/* Exit status for wait */
 	int	ps_xsig;		/* Stopping or killing signal */
 
-	pid_t	ps_oppid;	 	/* Save parent pid during ptrace. */
+	pid_t	ps_ppid;		/* [a] Cached parent pid */
+	pid_t	ps_oppid;	 	/* [a] Save parent pid during ptrace. */
 	int	ps_ptmask;		/* Ptrace event mask */
 	struct	ptrace_state *ps_ptstat;/* Ptrace state */
 
@@ -320,6 +321,7 @@ struct process {
 
 struct kcov_dev;
 struct lock_list_entry;
+struct kqueue;
 
 struct p_inentry {
 	u_long	 ie_serial;
@@ -382,6 +384,8 @@ struct proc {
 	struct	plimit	*p_limit;	/* [l] read ref. of p_p->ps_limit */
 	struct	kcov_dev *p_kd;		/* kcov device handle */
 	struct	lock_list_entry *p_sleeplocks;	/* WITNESS lock tracking */ 
+	struct	kqueue *p_kq;		/* [o] select/poll queue of evts */
+	unsigned long p_kq_serial;	/* [o] to check against enqueued evts */
 
 	int	 p_siglist;		/* [a] Signals arrived & not delivered*/
 
@@ -612,10 +616,7 @@ int	proc_cansugid(struct proc *);
 struct sleep_state {
 	int sls_s;
 	int sls_catch;
-	int sls_do_sleep;
 	int sls_locked;
-	int sls_sig;
-	int sls_unwind;
 	int sls_timeout;
 };
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmctl.c,v 1.75 2020/09/02 19:57:33 tb Exp $	*/
+/*	$OpenBSD: vmctl.c,v 1.76 2021/01/27 07:21:12 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
@@ -114,6 +114,7 @@ vm_balloon_complete(struct imsg *imsg, int *ret)
 
 	return (1);
 }
+struct imsgbuf *ibuf;
 
 /*
  * vm_start

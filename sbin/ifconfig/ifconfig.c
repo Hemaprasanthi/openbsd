@@ -1,4 +1,4 @@
-/*	$OpenBSD: ifconfig.c,v 1.430 2020/11/06 21:24:47 kn Exp $	*/
+/*	$OpenBSD: ifconfig.c,v 1.433 2021/02/10 14:45:27 bluhm Exp $	*/
 /*	$NetBSD: ifconfig.c,v 1.40 1997/10/01 02:19:43 enami Exp $	*/
 
 /*
@@ -1180,12 +1180,13 @@ printif(char *name, int ifaliases)
 			}
 		}
 		/* quickhack: sizeof(ifr) < sizeof(ifr6) */
-		if (ifa->ifa_addr->sa_family == AF_INET6) {
+		if (ifa->ifa_addr != NULL &&
+		    ifa->ifa_addr->sa_family == AF_INET6) {
 			memset(&ifr6, 0, sizeof(ifr6));
 			memcpy(&ifr6.ifr_addr, ifa->ifa_addr,
 			    MINIMUM(sizeof(ifr6.ifr_addr), ifa->ifa_addr->sa_len));
 			ifrp = (struct ifreq *)&ifr6;
-		} else {
+		} else if (ifa->ifa_addr != NULL) {
 			memset(&ifr, 0, sizeof(ifr));
 			memcpy(&ifr.ifr_addr, ifa->ifa_addr,
 			    MINIMUM(sizeof(ifr.ifr_addr), ifa->ifa_addr->sa_len));
@@ -1194,7 +1195,8 @@ printif(char *name, int ifaliases)
 		strlcpy(ifname, ifa->ifa_name, sizeof(ifname));
 		strlcpy(ifrp->ifr_name, ifa->ifa_name, sizeof(ifrp->ifr_name));
 
-		if (ifa->ifa_addr->sa_family == AF_LINK) {
+		if (ifa->ifa_addr != NULL &&
+		    ifa->ifa_addr->sa_family == AF_LINK) {
 			namep = ifa->ifa_name;
 			if (getinfo(ifrp, 0) < 0)
 				continue;
@@ -1209,8 +1211,9 @@ printif(char *name, int ifaliases)
 		if (!namep || !strcmp(namep, ifa->ifa_name)) {
 			const struct afswtch *p;
 
-			if (ifa->ifa_addr->sa_family == AF_INET &&
-			    ifaliases == 0 && noinet == 0)
+			if (ifa->ifa_addr == NULL ||
+			    (ifa->ifa_addr->sa_family == AF_INET &&
+			    ifaliases == 0 && noinet == 0))
 				continue;
 			if ((p = afp) != NULL) {
 				if (ifa->ifa_addr->sa_family == p->af_af)
@@ -1631,16 +1634,20 @@ void
 setifgroup(const char *group_name, int dummy)
 {
 	struct ifgroupreq ifgr;
+	size_t namelen;
 
 	memset(&ifgr, 0, sizeof(ifgr));
 	strlcpy(ifgr.ifgr_name, ifname, IFNAMSIZ);
 
-	if (group_name[0] &&
-	    isdigit((unsigned char)group_name[strlen(group_name) - 1]))
+	namelen = strlen(group_name);
+	if (namelen == 0)
+		errx(1, "setifgroup: group name empty");
+	if (namelen >= IFNAMSIZ)
+		errx(1, "setifgroup: group name too long");
+	if (isdigit((unsigned char)group_name[namelen - 1]))
 		errx(1, "setifgroup: group names may not end in a digit");
 
-	if (strlcpy(ifgr.ifgr_group, group_name, IFNAMSIZ) >= IFNAMSIZ)
-		errx(1, "setifgroup: group name too long");
+	strlcpy(ifgr.ifgr_group, group_name, IFNAMSIZ);
 	if (ioctl(sock, SIOCAIFGROUP, (caddr_t)&ifgr) == -1) {
 		if (errno != EEXIST)
 			err(1," SIOCAIFGROUP");
@@ -1655,10 +1662,6 @@ unsetifgroup(const char *group_name, int dummy)
 
 	memset(&ifgr, 0, sizeof(ifgr));
 	strlcpy(ifgr.ifgr_name, ifname, IFNAMSIZ);
-
-	if (group_name[0] &&
-	    isdigit((unsigned char)group_name[strlen(group_name) - 1]))
-		errx(1, "unsetifgroup: group names may not end in a digit");
 
 	if (strlcpy(ifgr.ifgr_group, group_name, IFNAMSIZ) >= IFNAMSIZ)
 		errx(1, "unsetifgroup: group name too long");
@@ -3584,7 +3587,8 @@ void
 in6_fillscopeid(struct sockaddr_in6 *sin6)
 {
 #ifdef __KAME__
-	if (IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr)) {
+	if (IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr) &&
+	    sin6->sin6_scope_id == 0) {
 		sin6->sin6_scope_id =
 			ntohs(*(u_int16_t *)&sin6->sin6_addr.s6_addr[2]);
 		sin6->sin6_addr.s6_addr[2] = sin6->sin6_addr.s6_addr[3] = 0;

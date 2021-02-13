@@ -1,4 +1,4 @@
-/*	$OpenBSD: cert.c,v 1.19 2020/10/24 08:09:39 claudio Exp $ */
+/*	$OpenBSD: cert.c,v 1.25 2021/02/08 09:22:53 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -19,6 +19,7 @@
 
 #include <arpa/inet.h>
 #include <assert.h>
+#include <ctype.h>
 #include <err.h>
 #include <inttypes.h>
 #include <stdarg.h>
@@ -26,7 +27,8 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <openssl/x509v3.h> /* DIST_POINT */
+#include <openssl/asn1.h>
+#include <openssl/x509.h>
 
 #include "extern.h"
 
@@ -141,6 +143,8 @@ static int
 sbgp_sia_resource_notify(struct parse *p,
 	const unsigned char *d, size_t dsz)
 {
+	size_t i;
+
 	if (p->res->notify != NULL) {
 		warnx("%s: RFC 6487 section 4.8.8: SIA: "
 		    "Notify location already specified", p->fn);
@@ -153,6 +157,14 @@ sbgp_sia_resource_notify(struct parse *p,
 		    p->fn);
 		return 0;
 	}
+	/* make sure only US-ASCII chars are in the URL */
+	for (i = 0; i < dsz; i++) {
+		if (isalnum(d[i]) || ispunct(d[i]))
+			continue;
+		warnx("%s: invalid URI", p->fn);
+		return 0;
+	}
+
 
 	if ((p->res->notify = strndup((const char *)d, dsz)) == NULL)
 		err(1, NULL);
@@ -168,6 +180,8 @@ static int
 sbgp_sia_resource_mft(struct parse *p,
 	const unsigned char *d, size_t dsz)
 {
+	size_t i;
+
 	if (p->res->mft != NULL) {
 		warnx("%s: RFC 6487 section 4.8.8: SIA: "
 		    "MFT location already specified", p->fn);
@@ -180,14 +194,58 @@ sbgp_sia_resource_mft(struct parse *p,
 		    p->fn);
 		return 0;
 	}
+
 	if (strcasecmp(d + dsz - 4, ".mft") != 0) {
 		warnx("%s: RFC 6487 section 4.8.8: SIA: "
 		    "invalid rsync URI suffix", p->fn);
 		return 0;
 	}
-
+	/* make sure only US-ASCII chars are in the URL */
+	for (i = 0; i < dsz; i++) {
+		if (isalnum(d[i]) || ispunct(d[i]))
+			continue;
+		warnx("%s: invalid URI", p->fn);
+		return 0;
+	}
 
 	if ((p->res->mft = strndup((const char *)d, dsz)) == NULL)
+		err(1, NULL);
+
+	return 1;
+}
+
+/*
+ * Parse the SIA manifest, 4.8.8.1.
+ * Returns zero on failure, non-zero on success.
+ */
+static int
+sbgp_sia_resource_carepo(struct parse *p,
+	const unsigned char *d, size_t dsz)
+{
+	size_t i;
+
+	if (p->res->repo != NULL) {
+		warnx("%s: RFC 6487 section 4.8.8: SIA: "
+		    "CA repository already specified", p->fn);
+		return 0;
+	}
+
+	/* Make sure it's an rsync:// address. */
+	if (dsz <= 8 || strncasecmp(d, "rsync://", 8)) {
+		warnx("%s: RFC 6487 section 4.8.8: not using rsync schema",
+		    p->fn);
+		return 0;
+	}
+
+	/* make sure only US-ASCII chars are in the URL */
+	for (i = 0; i < dsz; i++) {
+		if (isalnum(d[i]) || ispunct(d[i]))
+			continue;
+		warnx("%s: invalid URI", p->fn);
+		return 0;
+	}
+
+	if ((p->res->repo = strndup((const char *)d, dsz)) == NULL)
 		err(1, NULL);
 
 	return 1;
@@ -251,11 +309,13 @@ sbgp_sia_resource_entry(struct parse *p,
 	/*
 	 * Ignore all but manifest and RRDP notify URL.
 	 * Things we may see:
+	 *  - 1.3.6.1.5.5.7.48.5 (caRepository)
 	 *  - 1.3.6.1.5.5.7.48.10 (rpkiManifest)
 	 *  - 1.3.6.1.5.5.7.48.13 (rpkiNotify)
-	 *  - 1.3.6.1.5.5.7.48.5 (CA repository)
 	 */
-	if (strcmp(buf, "1.3.6.1.5.5.7.48.10") == 0)
+	if (strcmp(buf, "1.3.6.1.5.5.7.48.5") == 0)
+		rc = sbgp_sia_resource_carepo(p, d, plen);
+	else if (strcmp(buf, "1.3.6.1.5.5.7.48.10") == 0)
 		rc = sbgp_sia_resource_mft(p, d, plen);
 	else if (strcmp(buf, "1.3.6.1.5.5.7.48.13") == 0)
 		rc = sbgp_sia_resource_notify(p, d, plen);
@@ -297,6 +357,12 @@ sbgp_sia_resource(struct parse *p, const unsigned char *d, size_t dsz)
 			goto out;
 	}
 
+	if (strstr(p->res->mft, p->res->repo) != p->res->mft) {
+		warnx("%s: RFC 6487 section 4.8.8: SIA: "
+		    "conflicting URIs for caRepository and rpkiManifest",
+		    p->fn);
+		goto out;
+	}
 	rc = 1;
 out:
 	sk_ASN1_TYPE_pop_free(seq, ASN1_TYPE_free);
@@ -954,18 +1020,16 @@ out:
  * is also dereferenced.
  */
 static struct cert *
-cert_parse_inner(X509 **xp, const char *fn, const unsigned char *dgst, int ta)
+cert_parse_inner(X509 **xp, const char *fn, int ta)
 {
-	int		 rc = 0, extsz, c, sz;
+	int		 rc = 0, extsz, c;
 	size_t		 i;
 	X509		*x = NULL;
 	X509_EXTENSION	*ext = NULL;
 	ASN1_OBJECT	*obj;
 	struct parse	 p;
-	BIO		*bio = NULL, *shamd;
+	BIO		*bio = NULL;
 	FILE		*f;
-	EVP_MD		*md;
-	char		 mdbuf[EVP_MAX_MD_SIZE];
 
 	*xp = NULL;
 
@@ -985,47 +1049,9 @@ cert_parse_inner(X509 **xp, const char *fn, const unsigned char *dgst, int ta)
 	if ((p.res = calloc(1, sizeof(struct cert))) == NULL)
 		err(1, NULL);
 
-	/*
-	 * If we have a digest specified, create an MD chain that will
-	 * automatically compute a digest during the X509 creation.
-	 */
-
-	if (dgst != NULL) {
-		if ((shamd = BIO_new(BIO_f_md())) == NULL)
-			cryptoerrx("BIO_new");
-		if (!BIO_set_md(shamd, EVP_sha256()))
-			cryptoerrx("BIO_set_md");
-		if ((bio = BIO_push(shamd, bio)) == NULL)
-			cryptoerrx("BIO_push");
-	}
-
 	if ((x = *xp = d2i_X509_bio(bio, NULL)) == NULL) {
 		cryptowarnx("%s: d2i_X509_bio", p.fn);
 		goto out;
-	}
-
-	/*
-	 * If we have a digest, find it in the chain (we'll already have
-	 * made it, so assert otherwise) and verify it.
-	 */
-
-	if (dgst != NULL) {
-		shamd = BIO_find_type(bio, BIO_TYPE_MD);
-		assert(shamd != NULL);
-
-		if (!BIO_get_md(shamd, &md))
-			cryptoerrx("BIO_get_md");
-		assert(EVP_MD_type(md) == NID_sha256);
-
-		if ((sz = BIO_gets(shamd, mdbuf, EVP_MAX_MD_SIZE)) < 0)
-			cryptoerrx("BIO_gets");
-		assert(sz == SHA256_DIGEST_LENGTH);
-
-		if (memcmp(mdbuf, dgst, SHA256_DIGEST_LENGTH)) {
-			if (verbose > 0)
-				warnx("%s: bad message digest", p.fn);
-			goto out;
-		}
 	}
 
 	/* Look for X509v3 extensions. */
@@ -1137,10 +1163,10 @@ out:
 }
 
 struct cert *
-cert_parse(X509 **xp, const char *fn, const unsigned char *dgst)
+cert_parse(X509 **xp, const char *fn)
 {
 
-	return cert_parse_inner(xp, fn, dgst, 0);
+	return cert_parse_inner(xp, fn, 0);
 }
 
 struct cert *
@@ -1150,7 +1176,7 @@ ta_parse(X509 **xp, const char *fn, const unsigned char *pkey, size_t pkeysz)
 	struct cert	*p;
 	int		 rc = 0;
 
-	if ((p = cert_parse_inner(xp, fn, NULL, 1)) == NULL)
+	if ((p = cert_parse_inner(xp, fn, 1)) == NULL)
 		return NULL;
 
 	if (pkey != NULL) {
@@ -1188,11 +1214,11 @@ ta_parse(X509 **xp, const char *fn, const unsigned char *pkey, size_t pkeysz)
 void
 cert_free(struct cert *p)
 {
-
 	if (p == NULL)
 		return;
 
 	free(p->crl);
+	free(p->repo);
 	free(p->mft);
 	free(p->notify);
 	free(p->ips);
@@ -1204,35 +1230,31 @@ cert_free(struct cert *p)
 }
 
 static void
-cert_ip_buffer(char **b, size_t *bsz,
-	size_t *bmax, const struct cert_ip *p)
+cert_ip_buffer(struct ibuf *b, const struct cert_ip *p)
 {
-
-	io_simple_buffer(b, bsz, bmax, &p->afi, sizeof(enum afi));
-	io_simple_buffer(b, bsz, bmax, &p->type, sizeof(enum cert_ip_type));
+	io_simple_buffer(b, &p->afi, sizeof(enum afi));
+	io_simple_buffer(b, &p->type, sizeof(enum cert_ip_type));
 
 	if (p->type != CERT_IP_INHERIT) {
-		io_simple_buffer(b, bsz, bmax, &p->min, sizeof(p->min));
-		io_simple_buffer(b, bsz, bmax, &p->max, sizeof(p->max));
+		io_simple_buffer(b, &p->min, sizeof(p->min));
+		io_simple_buffer(b, &p->max, sizeof(p->max));
 	}
 
 	if (p->type == CERT_IP_RANGE)
-		ip_addr_range_buffer(b, bsz, bmax, &p->range);
+		ip_addr_range_buffer(b, &p->range);
 	else if (p->type == CERT_IP_ADDR)
-		ip_addr_buffer(b, bsz, bmax, &p->ip);
+		ip_addr_buffer(b, &p->ip);
 }
 
 static void
-cert_as_buffer(char **b, size_t *bsz,
-	size_t *bmax, const struct cert_as *p)
+cert_as_buffer(struct ibuf *b, const struct cert_as *p)
 {
-
-	io_simple_buffer(b, bsz, bmax, &p->type, sizeof(enum cert_as_type));
+	io_simple_buffer(b, &p->type, sizeof(enum cert_as_type));
 	if (p->type == CERT_AS_RANGE) {
-		io_simple_buffer(b, bsz, bmax, &p->range.min, sizeof(uint32_t));
-		io_simple_buffer(b, bsz, bmax, &p->range.max, sizeof(uint32_t));
+		io_simple_buffer(b, &p->range.min, sizeof(uint32_t));
+		io_simple_buffer(b, &p->range.max, sizeof(uint32_t));
 	} else if (p->type == CERT_AS_ID)
-		io_simple_buffer(b, bsz, bmax, &p->id, sizeof(uint32_t));
+		io_simple_buffer(b, &p->id, sizeof(uint32_t));
 }
 
 /*
@@ -1240,32 +1262,25 @@ cert_as_buffer(char **b, size_t *bsz,
  * See cert_read() for the other side of the pipe.
  */
 void
-cert_buffer(char **b, size_t *bsz, size_t *bmax, const struct cert *p)
+cert_buffer(struct ibuf *b, const struct cert *p)
 {
 	size_t	 i;
-	int	 has_crl, has_aki;
 
-	io_simple_buffer(b, bsz, bmax, &p->valid, sizeof(int));
-	io_simple_buffer(b, bsz, bmax, &p->ipsz, sizeof(size_t));
+	io_simple_buffer(b, &p->valid, sizeof(int));
+	io_simple_buffer(b, &p->ipsz, sizeof(size_t));
 	for (i = 0; i < p->ipsz; i++)
-		cert_ip_buffer(b, bsz, bmax, &p->ips[i]);
+		cert_ip_buffer(b, &p->ips[i]);
 
-	io_simple_buffer(b, bsz, bmax, &p->asz, sizeof(size_t));
+	io_simple_buffer(b, &p->asz, sizeof(size_t));
 	for (i = 0; i < p->asz; i++)
-		cert_as_buffer(b, bsz, bmax, &p->as[i]);
+		cert_as_buffer(b, &p->as[i]);
 
-	io_str_buffer(b, bsz, bmax, p->mft);
-	io_str_buffer(b, bsz, bmax, p->notify);
-
-	has_crl = (p->crl != NULL);
-	io_simple_buffer(b, bsz, bmax, &has_crl, sizeof(int));
-	if (has_crl)
-		io_str_buffer(b, bsz, bmax, p->crl);
-	has_aki = (p->aki != NULL);
-	io_simple_buffer(b, bsz, bmax, &has_aki, sizeof(int));
-	if (has_aki)
-		io_str_buffer(b, bsz, bmax, p->aki);
-	io_str_buffer(b, bsz, bmax, p->ski);
+	io_str_buffer(b, p->mft);
+	io_str_buffer(b, p->notify);
+	io_str_buffer(b, p->repo);
+	io_str_buffer(b, p->crl);
+	io_str_buffer(b, p->aki);
+	io_str_buffer(b, p->ski);
 }
 
 static void
@@ -1308,7 +1323,6 @@ cert_read(int fd)
 {
 	struct cert	*p;
 	size_t		 i;
-	int		 has_crl, has_aki;
 
 	if ((p = calloc(1, sizeof(struct cert))) == NULL)
 		err(1, NULL);
@@ -1329,14 +1343,13 @@ cert_read(int fd)
 		cert_as_read(fd, &p->as[i]);
 
 	io_str_read(fd, &p->mft);
+	assert(p->mft);
 	io_str_read(fd, &p->notify);
-	io_simple_read(fd, &has_crl, sizeof(int));
-	if (has_crl)
-		io_str_read(fd, &p->crl);
-	io_simple_read(fd, &has_aki, sizeof(int));
-	if (has_aki)
-		io_str_read(fd, &p->aki);
+	io_str_read(fd, &p->repo);
+	io_str_read(fd, &p->crl);
+	io_str_read(fd, &p->aki);
 	io_str_read(fd, &p->ski);
+	assert(p->ski);
 
 	return p;
 }

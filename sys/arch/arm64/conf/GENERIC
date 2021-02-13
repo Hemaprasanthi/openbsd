@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.179 2020/11/17 14:32:34 patrick Exp $
+# $OpenBSD: GENERIC,v 1.186 2021/02/11 23:54:40 patrick Exp $
 #
 # GENERIC machine description file
 #
@@ -49,6 +49,7 @@ acpitz*		at acpi?
 ahci*		at acpi?
 ccp*		at acpi?		# AMD Cryptographic Co-processor
 com*		at acpi?
+dwgpio*		at acpi?
 dwiic*		at acpi?
 iic*		at dwiic?
 ipmi*		at acpi?
@@ -125,11 +126,15 @@ amdgpu*		at pci?
 drm*		at amdgpu?
 wsdisplay*	at amdgpu?
 
+# Apple
+exuart*		at fdt?
+
 # iMX
 imxccm*		at fdt? early 1
 imxiomuxc*	at fdt? early 1
 imxanatop*	at fdt? early 1
 imxsrc*		at fdt? early 1
+imxdwusb*	at fdt?
 imxehci*	at fdt?
 usb*		at imxehci?
 imxgpc*		at fdt?
@@ -217,6 +222,7 @@ mvrng*		at fdt?
 mvrtc*		at fdt?
 mvspi*		at fdt?
 moxtet*		at spi?
+mvsw*		at fdt?
 mvtemp*		at fdt?
 mvuart*		at fdt?
 sfp*		at fdt?
@@ -278,6 +284,7 @@ re*		at pci?			# Realtek 8169/8169S/8110S
 rge*		at pci?			# Realtek 8125
 
 # PCI WiFi
+athn*		at pci?			# Atheros AR9k (802.11a/g/n)
 bwfm*		at pci?			# Broadcom FullMAC
 
 # PCI SCSI
@@ -365,6 +372,8 @@ uslhcom*	at uhidev?		# Silicon Labs CP2110 USB HID UART
 ucom*		at uslhcom?
 uhid*		at uhidev?		# USB generic HID support
 fido*		at uhidev?		# FIDO/U2F security key support
+ujoy*		at uhidev?		# USB joystick/gamecontroller support
+uhidpp*		at uhidev?		# Logitech HID++ Devices
 upd*		at uhidev?		# USB Power Devices sensors
 aue*		at uhub?		# ADMtek AN986 Pegasus Ethernet
 atu*		at uhub?		# Atmel AT76c50x based 802.11b

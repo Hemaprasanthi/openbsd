@@ -1,4 +1,4 @@
-/*	$OpenBSD: ums.c,v 1.45 2020/08/23 11:08:02 mglocker Exp $ */
+/*	$OpenBSD: ums.c,v 1.47 2021/01/29 16:59:41 sthen Exp $ */
 /*	$NetBSD: ums.c,v 1.60 2003/03/11 16:44:00 augustss Exp $	*/
 
 /*
@@ -32,7 +32,7 @@
  */
 
 /*
- * HID spec: http://www.usb.org/developers/devclass_docs/HID1_11.pdf
+ * HID spec: https://www.usb.org/sites/default/files/hid1_11.pdf
  */
 
 #include <sys/param.h>
@@ -150,6 +150,8 @@ ums_attach(struct device *parent, struct device *self, void *aux)
 		qflags |= HIDMS_MS_BAD_CLASS;
 	if (quirks & UQ_MS_LEADING_BYTE)
 		qflags |= HIDMS_LEADINGBYTE;
+	if (quirks & UQ_MS_VENDOR_BUTTONS)
+		qflags |= HIDMS_VENDOR_BUTTONS;
 
 	if (hidms_setup(self, ms, qflags, uha->reportid, desc, size) != 0)
 		return;

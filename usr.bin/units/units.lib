@@ -1,4 +1,4 @@
-/ $OpenBSD: units.lib,v 1.139 2020/11/01 07:48:56 jmc Exp $
+/ $OpenBSD: units.lib,v 1.142 2021/02/01 07:33:19 jmc Exp $
 / $NetBSD: units.lib,v 1.3 1996/04/06 06:01:04 thorpej Exp $
 
 / primitive units
@@ -300,50 +300,50 @@ lumen			cd sr
 lux			cd sr/m2
 
 / http://www.federalreserve.gov/releases/h10/current/
-/ as of October 23, 2020
+/ as of January 22, 2021
 $			dollar
-australiadollar		.7118 $
-brazilreal		1|5.6135 $
-canadadollar		1|1.3147 $
-chinayuan		1|6.6861 $
-denmarkkrone		1|6.2826 $
-euro			1.1844 $
-hongkongdollar		1|7.7498 $
-indiarupee		1|73.8600 $
-japanyen		1|104.7800 $
-malaysiaringgit		1|4.1554 $
-mexicopeso		1|20.8961 $
-newzealanddollar	.6677 $
-norwaykrone		1|9.2637 $
-singaporedollar		1|1.3584 $
-southafricarand		1|16.2000 $
-southkoreawon		1|1129.7700 $
-srilankarupee		1|184.3000 $
-swedenkrona		1|8.7688 $
-switzerlandfranc	1|0.9055 $
-taiwandollar		1|28.6500 $
-thailandbaht		1|31.3100 $
-unitedkingdompound	1.3039 $
-venezuelabolivar	1|458804.50 $
+australiadollar		.7728 $
+brazilreal		1|5.4518 $
+canadadollar		1|1.2711 $
+chinayuan		1|6.4810 $
+denmarkkrone		1|6.1081 $
+euro			1.2179 $
+hongkongdollar		1|7.7519 $
+indiarupee		1|72.9800 $
+japanyen		1|103.7600 $
+malaysiaringgit		1|4.0419 $
+mexicopeso		1|19.9250 $
+newzealanddollar	.7188 $
+norwaykrone		1|8.4820 $
+singaporedollar		1|1.3271 $
+southafricarand		1|15.0625 $
+southkoreawon		1|1105.5000 $
+srilankarupee		1|196.4200 $
+swedenkrona		1|8.2820 $
+switzerlandfranc	1|0.8853 $
+taiwandollar		1|27.9600 $
+thailandbaht		1|29.9900 $
+unitedkingdompound	1.3685 $
+venezuelabolivar	1|1647644.9 $
 
-/ The Economist, October 28, 2020
+/ The Economist, January 27, 2021
 / Hungary, Iceland, Ukraine, Vietnam: no updates available since October 2018
-argentinapeso		1|78.3 $
-chilepeso		1|774 $
-colombiapeso		1|3839 $
-czechkoruna		1|23.3 $
+argentinapeso		1|87.1 $
+chilepeso		1|738 $
+colombiapeso		1|3623 $
+czechkoruna		1|21.6 $
 egyptpound		1|15.7 $
 hungaryforint		1|276 $
 icelandkrona		1|110 $
-indonesiarupiah		1|14625 $
-israelshekel		1|3.41 $
-pakistanrupee		1|161 $
-perunuevosol		1|3.61 $
-philippinespeso		1|48.4 $
-polandzloty		1|3.93 $
-russiarouble		1|78.7 $
+indonesiarupiah		1|14050 $
+israelshekel		1|3.27 $
+pakistanrupee		1|160 $
+perunuevosol		1|3.65 $
+philippinespeso		1|48.1 $
+polandzloty		1|3.76 $
+russiarouble		1|75.6 $
 saudiarabiariyal	1|3.75 $
-turkeylira		1|8.28 $
+turkeylira		1|7.38 $
 ukrainehryvnia		1|28.1 $
 vietnamdong		1|23349 $
 

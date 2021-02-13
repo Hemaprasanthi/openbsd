@@ -1,4 +1,4 @@
-/*	$OpenBSD: relayd.h,v 1.262 2020/09/14 11:30:25 martijn Exp $	*/
+/*	$OpenBSD: relayd.h,v 1.265 2021/01/27 20:33:05 eric Exp $	*/
 
 /*
  * Copyright (c) 2006 - 2016 Reyk Floeter <reyk@openbsd.org>
@@ -292,7 +292,8 @@ enum key_option {
 	KEY_OPTION_SET,
 	KEY_OPTION_REMOVE,
 	KEY_OPTION_HASH,
-	KEY_OPTION_LOG
+	KEY_OPTION_LOG,
+	KEY_OPTION_STRIP
 };
 
 enum key_type {
@@ -913,7 +914,7 @@ struct control_sock {
 };
 TAILQ_HEAD(control_socks, control_sock);
 
-struct {
+extern struct {
 	struct event	 ev;
 	int		 fd;
 } control_state;
@@ -1018,7 +1019,8 @@ enum privsep_procid {
 	PROC_PFE,
 	PROC_CA,
 	PROC_MAX
-} privsep_process;
+};
+extern enum privsep_procid privsep_process;
 
 /* Attach the control socket to the following process */
 #define PROC_CONTROL	PROC_PFE
@@ -1298,7 +1300,6 @@ char	*ssl_load_key(struct relayd *, const char *, off_t *, char *);
 uint8_t *ssl_update_certificate(const uint8_t *, size_t, EVP_PKEY *,
 	    EVP_PKEY *, X509 *, size_t *);
 int	 ssl_load_pkey(char *, off_t, X509 **, EVP_PKEY **);
-int	 ssl_ctx_fake_private_key(char *, off_t, const char **);
 
 /* ca.c */
 void	 ca(struct privsep *, struct privsep_proc *);

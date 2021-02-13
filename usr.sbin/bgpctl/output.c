@@ -1,4 +1,4 @@
-/*	$OpenBSD: output.c,v 1.10 2020/10/21 06:52:45 claudio Exp $ */
+/*	$OpenBSD: output.c,v 1.12 2021/01/25 09:17:33 claudio Exp $ */
 
 /*
  * Copyright (c) 2003 Henning Brauer <henning@openbsd.org>
@@ -76,6 +76,10 @@ show_head(struct parse_result *res)
 		printf("%-5s %3s %-20s %-15s  %5s %5s %s\n",
 		    "flags", "ovs", "destination", "gateway", "lpref", "med",
 		    "aspath origin");
+		break;
+	case SHOW_SET:
+		printf("%-6s %-34s %7s %7s %6s %11s\n", "Type", "Name",
+		    "#IPv4", "#IPv6", "#ASnum", "Last Change");
 		break;
 	case NETWORK_SHOW:
 		printf("flags: S = Static\n");
@@ -643,8 +647,8 @@ show_attr(u_char *data, size_t len, struct parse_result *res)
 	case ATTR_ASPATH:
 	case ATTR_AS4_PATH:
 		/* prefer 4-byte AS here */
-		e4 = aspath_verify(data, alen, 1);
-		e2 = aspath_verify(data, alen, 0);
+		e4 = aspath_verify(data, alen, 1, 0);
+		e2 = aspath_verify(data, alen, 0, 0);
 		if (e4 == 0 || e4 == AS_ERR_SOFT) {
 			path = data;
 		} else if (e2 == 0 || e2 == AS_ERR_SOFT) {
@@ -958,6 +962,22 @@ show_rib_hash(struct rde_hashstats *hash)
 }
 
 static void
+show_rib_set(struct ctl_show_set *set)
+{
+	char buf[64];
+
+	if (set->type == ASNUM_SET)
+		snprintf(buf, sizeof(buf), "%7s %7s %6zu",
+		    "-", "-", set->as_cnt);
+	else
+		snprintf(buf, sizeof(buf), "%7zu %7zu %6s",
+		    set->v4_cnt, set->v6_cnt, "-");
+
+	printf("%-6s %-34s %s %11s\n", fmt_set_type(set), set->name,
+	    buf, fmt_monotime(set->lastchange));
+}
+
+static void
 show_result(u_int rescode)
 {
 	if (rescode == 0)
@@ -988,6 +1008,7 @@ const struct output show_output = {
 	.rib = show_rib,
 	.rib_mem = show_rib_mem,
 	.rib_hash = show_rib_hash,
+	.set = show_rib_set,
 	.result = show_result,
 	.tail = show_tail
 };

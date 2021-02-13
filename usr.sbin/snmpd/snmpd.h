@@ -1,4 +1,4 @@
-/*	$OpenBSD: snmpd.h,v 1.90 2020/09/06 15:51:28 martijn Exp $	*/
+/*	$OpenBSD: snmpd.h,v 1.94 2021/02/05 10:30:45 martijn Exp $	*/
 
 /*
  * Copyright (c) 2007, 2008, 2012 Reyk Floeter <reyk@openbsd.org>
@@ -48,8 +48,8 @@
 #define CONF_FILE		"/etc/snmpd.conf"
 #define SNMPD_SOCKET		"/var/run/snmpd.sock"
 #define SNMPD_USER		"_snmpd"
-#define SNMPD_PORT		"161"
-#define SNMPD_TRAPPORT		"162"
+#define SNMP_PORT		"161"
+#define SNMPTRAP_PORT		"162"
 
 #define SNMPD_MAXSTRLEN		484
 #define SNMPD_MAXCOMMUNITYLEN	SNMPD_MAXSTRLEN
@@ -88,7 +88,7 @@ enum imsg_type {
 	IMSG_CTL_VERBOSE,
 	IMSG_CTL_RELOAD,
 	IMSG_CTL_PROCFD,
-	IMSG_ALERT
+	IMSG_TRAP_EXEC
 };
 
 struct imsgev {
@@ -110,11 +110,10 @@ struct imsgev {
 enum privsep_procid {
 	PROC_PARENT,	/* Parent process and application interface */
 	PROC_SNMPE,	/* SNMP engine */
-	PROC_TRAP,	/* SNMP trap receiver */
 	PROC_MAX
 };
 
-enum privsep_procid privsep_process;
+extern enum privsep_procid privsep_process;
 
 /* Attach the control socket to the following process */
 #define PROC_CONTROL	PROC_SNMPE
@@ -384,8 +383,11 @@ struct snmp_message {
 	struct sockaddr_storage	 sm_ss;
 	socklen_t		 sm_slen;
 	int			 sm_sock_tcp;
+	int			 sm_aflags;
+	int			 sm_type;
 	struct event		 sm_sockev;
 	char			 sm_host[HOST_NAME_MAX+1];
+	in_port_t		 sm_port;
 
 	struct sockaddr_storage	 sm_local_ss;
 	socklen_t		 sm_local_slen;
@@ -396,6 +398,8 @@ struct snmp_message {
 
 	u_int8_t		 sm_data[READ_BUF_SIZE];
 	size_t			 sm_datalen;
+
+	uint32_t		 sm_transactionid;
 
 	u_int			 sm_version;
 
@@ -434,7 +438,11 @@ struct snmp_message {
 
 	struct ber_element	*sm_varbind;
 	struct ber_element	*sm_varbindresp;
+
+	RB_ENTRY(snmp_message)	 sm_entry;
 };
+RB_HEAD(snmp_messages, snmp_message);
+extern struct snmp_messages snmp_messages;
 
 /* Defined in SNMPv2-MIB.txt (RFC 3418) */
 struct snmp_stats {
@@ -482,6 +490,7 @@ struct address {
 	struct sockaddr_storage	 ss;
 	in_port_t		 port;
 	int			 type;
+	int			 flags;
 	int			 fd;
 	struct event		 ev;
 	struct event		 evt;
@@ -489,6 +498,10 @@ struct address {
 	TAILQ_ENTRY(address)	 entry;
 };
 TAILQ_HEAD(addresslist, address);
+
+#define ADDRESS_FLAG_READ 0x1
+#define ADDRESS_FLAG_WRITE 0x2
+#define ADDRESS_FLAG_NOTIFY 0x4
 
 struct trap_address {
 	struct sockaddr_storage	 ss;
@@ -635,6 +648,8 @@ struct kif_arp	*karp_getaddr(struct sockaddr *, u_short, int);
 void		 snmpe(struct privsep *, struct privsep_proc *);
 void		 snmpe_shutdown(void);
 void		 snmpe_dispatchmsg(struct snmp_message *);
+int		 snmp_messagecmp(struct snmp_message *, struct snmp_message *);
+RB_PROTOTYPE(snmp_messages, snmp_message, sm_entry, snmp_messagecmp)
 
 /* trap.c */
 void		 trap_init(void);
@@ -761,9 +776,8 @@ struct imsgev *
 int	 proc_flush_imsg(struct privsep *, enum privsep_procid, int);
 
 /* traphandler.c */
-void	 traphandler(struct privsep *, struct privsep_proc *);
-void	 traphandler_shutdown(void);
-int	 snmpd_dispatch_traphandler(int, struct privsep_proc *, struct imsg *);
+int	 traphandler_parse(struct snmp_message *);
+int	 traphandler_priv_recvmsg(struct privsep_proc *, struct imsg *);
 void	 trapcmd_free(struct trapcmd *);
 int	 trapcmd_add(struct trapcmd *);
 struct trapcmd *
@@ -774,8 +788,6 @@ ssize_t	 sendtofrom(int, void *, size_t, int, struct sockaddr *,
 	    socklen_t, struct sockaddr *, socklen_t);
 ssize_t	 recvfromto(int, void *, size_t, int, struct sockaddr *,
 	    socklen_t *, struct sockaddr *, socklen_t *);
-void	 print_debug(const char *, ...);
-void	 print_verbose(const char *, ...);
 const char *log_in6addr(const struct in6_addr *);
 const char *print_host(struct sockaddr_storage *, char *, size_t);
 

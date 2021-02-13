@@ -1,4 +1,4 @@
-/* $OpenBSD: tmux.h,v 1.1080 2020/10/30 08:55:56 nicm Exp $ */
+/* $OpenBSD: tmux.h,v 1.1090 2021/02/11 09:39:29 nicm Exp $ */
 
 /*
  * Copyright (c) 2007 Nicholas Marriott <nicholas.marriott@gmail.com>
@@ -55,8 +55,8 @@ struct mouse_event;
 struct options;
 struct options_array_item;
 struct options_entry;
-struct screen_write_collect_item;
-struct screen_write_collect_line;
+struct screen_write_citem;
+struct screen_write_cline;
 struct screen_write_ctx;
 struct session;
 struct tty_ctx;
@@ -261,6 +261,7 @@ enum tty_code_code {
 	TTYC_AX,
 	TTYC_BCE,
 	TTYC_BEL,
+	TTYC_BIDI,
 	TTYC_BLINK,
 	TTYC_BOLD,
 	TTYC_CIVIS,
@@ -726,6 +727,13 @@ struct grid {
 	struct grid_line	*linedata;
 };
 
+/* Virtual cursor in a grid. */
+struct grid_reader {
+	struct grid	*gd;
+	u_int		 cx;
+	u_int		 cy;
+};
+
 /* Style alignment. */
 enum style_align {
 	STYLE_ALIGN_DEFAULT,
@@ -787,55 +795,51 @@ struct style {
 struct screen_sel;
 struct screen_titles;
 struct screen {
-	char			*title;
-	char			*path;
-	struct screen_titles	*titles;
+	char				*title;
+	char				*path;
+	struct screen_titles		*titles;
 
-	struct grid		*grid;		/* grid data */
+	struct grid			*grid;	  /* grid data */
 
-	u_int			 cx;		/* cursor x */
-	u_int			 cy;		/* cursor y */
+	u_int				 cx;	  /* cursor x */
+	u_int				 cy;	  /* cursor y */
 
-	u_int			 cstyle;	/* cursor style */
-	char			*ccolour;	/* cursor colour string */
+	u_int				 cstyle;  /* cursor style */
+	char				*ccolour; /* cursor colour string */
 
-	u_int			 rupper;	/* scroll region top */
-	u_int			 rlower;	/* scroll region bottom */
+	u_int				 rupper;  /* scroll region top */
+	u_int				 rlower;  /* scroll region bottom */
 
-	int			 mode;
+	int				 mode;
 
-	u_int			 saved_cx;
-	u_int			 saved_cy;
-	struct grid		*saved_grid;
-	struct grid_cell	 saved_cell;
-	int			 saved_flags;
+	u_int				 saved_cx;
+	u_int				 saved_cy;
+	struct grid			*saved_grid;
+	struct grid_cell		 saved_cell;
+	int				 saved_flags;
 
-	bitstr_t		*tabs;
-	struct screen_sel	*sel;
+	bitstr_t			*tabs;
+	struct screen_sel		*sel;
 
-	struct screen_write_collect_line *write_list;
+	struct screen_write_cline	*write_list;
 };
 
 /* Screen write context. */
 typedef void (*screen_write_init_ctx_cb)(struct screen_write_ctx *,
     struct tty_ctx *);
 struct screen_write_ctx {
-	struct window_pane	*wp;
-	struct screen		*s;
+	struct window_pane		*wp;
+	struct screen			*s;
 
-	int			 flags;
+	int				 flags;
 #define SCREEN_WRITE_SYNC 0x1
 
-	screen_write_init_ctx_cb init_ctx_cb;
-	void			*arg;
+	screen_write_init_ctx_cb	 init_ctx_cb;
+	void				*arg;
 
-	struct screen_write_collect_item *item;
-	u_int			 scrolled;
-	u_int			 bg;
-
-	u_int			 cells;
-	u_int			 written;
-	u_int			 skipped;
+	struct screen_write_citem	*item;
+	u_int				 scrolled;
+	u_int				 bg;
 };
 
 /* Screen redraw context. */
@@ -887,6 +891,7 @@ struct window_mode {
 			     struct cmd_find_state *, struct args *);
 	void		 (*free)(struct window_mode_entry *);
 	void		 (*resize)(struct window_mode_entry *, u_int, u_int);
+	void		 (*update)(struct window_mode_entry *);
 	void		 (*key)(struct window_mode_entry *, struct client *,
 			     struct session *, struct winlink *, key_code,
 			     struct mouse_event *);
@@ -992,9 +997,6 @@ struct window_pane {
 
 	char		*searchstr;
 	int		 searchregex;
-
-	size_t		 written;
-	size_t		 skipped;
 
 	int		 border_gc_set;
 	struct grid_cell border_gc;
@@ -1537,6 +1539,8 @@ typedef void (*client_file_cb) (struct client *, const char *, int, int,
     struct evbuffer *, void *);
 struct client_file {
 	struct client			*c;
+	struct tmuxpeer			*peer;
+	struct client_files		*tree;
 	int				 references;
 	int				 stream;
 
@@ -1627,7 +1631,7 @@ struct client {
 #define CLIENT_DEAD 0x200
 #define CLIENT_REDRAWBORDERS 0x400
 #define CLIENT_READONLY 0x800
-/* 0x1000 unused */
+#define CLIENT_NOSTARTSERVER 0x1000
 #define CLIENT_CONTROL 0x2000
 #define CLIENT_CONTROLCONTROL 0x4000
 #define CLIENT_FOCUSED 0x8000
@@ -1685,6 +1689,7 @@ struct client {
 
 	char		*prompt_string;
 	struct utf8_data *prompt_buffer;
+	char		*prompt_last;
 	size_t		 prompt_index;
 	prompt_input_cb	 prompt_inputcb;
 	prompt_free_cb	 prompt_freecb;
@@ -1881,7 +1886,6 @@ const char	*find_home(void);
 const char	*getversion(void);
 void		 expand_paths(const char *, char ***, u_int *);
 
-
 /* proc.c */
 struct imsg;
 int	proc_send(struct tmuxpeer *, enum msgtype, int, const void *, size_t);
@@ -1895,6 +1899,7 @@ struct tmuxpeer *proc_add_peer(struct tmuxproc *, int,
 void	proc_remove_peer(struct tmuxpeer *);
 void	proc_kill_peer(struct tmuxpeer *);
 void	proc_toggle_log(struct tmuxproc *);
+pid_t	proc_fork_and_daemon(int *);
 
 /* cfg.c */
 extern int cfg_finished;
@@ -1905,6 +1910,7 @@ int	load_cfg(const char *, struct client *, struct cmdq_item *, int,
 int	load_cfg_from_buffer(const void *, size_t, const char *,
 	    struct client *, struct cmdq_item *, int, struct cmdq_item **);
 void	set_cfg_file(const char *);
+const char *get_cfg_file(void);
 void printflike(1, 2) cfg_add_cause(const char *, ...);
 void	cfg_print_causes(struct cmdq_item *);
 void	cfg_show_causes(struct session *);
@@ -2368,7 +2374,10 @@ void	alerts_check_session(struct session *);
 /* file.c */
 int	 file_cmp(struct client_file *, struct client_file *);
 RB_PROTOTYPE(client_files, client_file, entry, file_cmp);
-struct client_file *file_create(struct client *, int, client_file_cb, void *);
+struct client_file *file_create_with_peer(struct tmuxpeer *,
+	    struct client_files *, int, client_file_cb, void *);
+struct client_file *file_create_with_client(struct client *, int,
+	    client_file_cb, void *);
 void	 file_free(struct client_file *);
 void	 file_fire_done(struct client_file *);
 void	 file_fire_read(struct client_file *);
@@ -2381,6 +2390,16 @@ void	 file_write(struct client *, const char *, int, const void *, size_t,
 	     client_file_cb, void *);
 void	 file_read(struct client *, const char *, client_file_cb, void *);
 void	 file_push(struct client_file *);
+int	 file_write_left(struct client_files *);
+void	 file_write_open(struct client_files *, struct tmuxpeer *,
+	     struct imsg *, int, int, client_file_cb, void *);
+void	 file_write_data(struct client_files *, struct imsg *);
+void	 file_write_close(struct client_files *, struct imsg *);
+void	 file_read_open(struct client_files *, struct tmuxpeer *, struct imsg *,
+	     int, int, client_file_cb, void *);
+void	 file_write_ready(struct client_files *, struct imsg *);
+void	 file_read_data(struct client_files *, struct imsg *);
+void	 file_read_done(struct client_files *, struct imsg *);
 
 /* server.c */
 extern struct tmuxproc *server_proc;
@@ -2546,6 +2565,22 @@ void	 grid_reflow(struct grid *, u_int);
 void	 grid_wrap_position(struct grid *, u_int, u_int, u_int *, u_int *);
 void	 grid_unwrap_position(struct grid *, u_int *, u_int *, u_int, u_int);
 u_int	 grid_line_length(struct grid *, u_int);
+
+/* grid-reader.c */
+void	 grid_reader_start(struct grid_reader *, struct grid *, u_int, u_int);
+void	 grid_reader_get_cursor(struct grid_reader *, u_int *, u_int *);
+u_int	 grid_reader_line_length(struct grid_reader *);
+int	 grid_reader_in_set(struct grid_reader *, const char *);
+void	 grid_reader_cursor_right(struct grid_reader *, int, int);
+void	 grid_reader_cursor_left(struct grid_reader *);
+void	 grid_reader_cursor_down(struct grid_reader *);
+void	 grid_reader_cursor_up(struct grid_reader *);
+void	 grid_reader_cursor_start_of_line(struct grid_reader *, int);
+void	 grid_reader_cursor_end_of_line(struct grid_reader *, int, int);
+void	 grid_reader_cursor_next_word(struct grid_reader *, const char *);
+void	 grid_reader_cursor_next_word_end(struct grid_reader *, const char *);
+void	 grid_reader_cursor_previous_word(struct grid_reader *, const char *,
+	     int);
 
 /* grid-view.c */
 void	 grid_view_get_cell(struct grid *, u_int, u_int, struct grid_cell *);
@@ -2737,7 +2772,7 @@ int		 window_pane_key(struct window_pane *, struct client *,
 int		 window_pane_visible(struct window_pane *);
 u_int		 window_pane_search(struct window_pane *, const char *, int,
 		     int);
-const char	*window_printable_flags(struct winlink *);
+const char	*window_printable_flags(struct winlink *, int);
 struct window_pane *window_pane_find_up(struct window_pane *);
 struct window_pane *window_pane_find_down(struct window_pane *);
 struct window_pane *window_pane_find_left(struct window_pane *);

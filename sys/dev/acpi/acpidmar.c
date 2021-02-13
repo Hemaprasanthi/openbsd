@@ -245,7 +245,7 @@ struct acpidmar_softc {
 	bus_space_tag_t		sc_memt;
 	int			sc_haw;
 	int			sc_flags;
-	struct bus_dma_tag	sc_dmat;
+	bus_dma_tag_t		sc_dmat;
 
 	struct ivhd_dte		*sc_hwdte;
 	paddr_t			sc_hwdtep;
@@ -875,7 +875,7 @@ iommu_alloc_hwdte(struct acpidmar_softc *sc, size_t size, paddr_t *paddr)
 	caddr_t vaddr;
 	bus_dmamap_t map;
 	bus_dma_segment_t seg;
-	bus_dma_tag_t dmat;
+	bus_dma_tag_t dmat = sc->sc_dmat;
 	int rc, nsegs;
 
 	rc = _bus_dmamap_create(dmat, size, 1, size, 0,
@@ -1438,10 +1438,11 @@ domain_create(struct iommu_softc *iommu, int did)
 
 	/* Setup IOMMU address map */
 	gaw = min(iommu->agaw, iommu->mgaw);
-	dom->iovamap = extent_create(dom->exname, 1024*1024*16,
-	    (1LL << gaw)-1,
-	    M_DEVBUF, NULL, 0,
-	    EX_WAITOK|EX_NOCOALESCE);
+	dom->iovamap = extent_create(dom->exname, 0, (1LL << gaw)-1,
+	    M_DEVBUF, NULL, 0, EX_WAITOK | EX_NOCOALESCE);
+
+	/* Reserve the first 16M */
+	extent_alloc_region(dom->iovamap, 0, 16*1024*1024, EX_WAITOK);
 
 	/* Zero out MSI Interrupt region */
 	extent_alloc_region(dom->iovamap, MSI_BASE_ADDRESS, MSI_BASE_SIZE,
@@ -1897,7 +1898,8 @@ acpidmar_init(struct acpidmar_softc *sc, struct acpi_dmar *dmar)
 				    dom_bdf(dom), rmrr->start, rmrr->end);
 				domain_map_pthru(dom, rmrr->start, rmrr->end);
 				rc = extent_alloc_region(dom->iovamap,
-				    rmrr->start, rmrr->end, EX_WAITOK);
+				    rmrr->start, rmrr->end,
+				    EX_WAITOK | EX_CONFLICTOK);
 			}
 		}
 	}
@@ -2634,6 +2636,7 @@ acpidmar_attach(struct device *parent, struct device *self, void *aux)
 
 	hdr = (struct acpi_table_header *)aaa->aaa_table;
 	sc->sc_memt = aaa->aaa_memt;
+	sc->sc_dmat = aaa->aaa_dmat;
 	if (memcmp(hdr->signature, DMAR_SIG, sizeof(DMAR_SIG) - 1) == 0) {
 		acpidmar_sc = sc;
 		acpidmar_init(sc, dmar);

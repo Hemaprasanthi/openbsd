@@ -1,4 +1,4 @@
-/* $OpenBSD: bwfm.c,v 1.77 2020/11/16 17:12:55 patrick Exp $ */
+/* $OpenBSD: bwfm.c,v 1.80 2021/01/31 11:07:51 patrick Exp $ */
 /*
  * Copyright (c) 2010-2016 Broadcom Corporation
  * Copyright (c) 2016,2017 Patrick Wildt <patrick@blueri.se>
@@ -1323,6 +1323,8 @@ bwfm_chip_sr_capable(struct bwfm_softc *sc)
 		reg = sc->sc_buscore_ops->bc_read(sc, core->co_base +
 		    BWFM_CHIP_REG_SR_CONTROL1);
 		return reg != 0;
+	case BRCM_CC_4378_CHIP_ID:
+		return 0;
 	default:
 		core = bwfm_chip_get_pmu(sc);
 		reg = sc->sc_buscore_ops->bc_read(sc, core->co_base +
@@ -1481,6 +1483,9 @@ bwfm_chip_tcm_rambase(struct bwfm_softc *sc)
 		break;
 	case CY_CC_4373_CHIP_ID:
 		sc->sc_chip.ch_rambase = 0x160000;
+		break;
+	case BRCM_CC_4378_CHIP_ID:
+		sc->sc_chip.ch_rambase = 0x352000;
 		break;
 	default:
 		printf("%s: unknown chip: %d\n", DEVNAME(sc),
@@ -2607,7 +2612,8 @@ bwfm_set_key(struct ieee80211com *ic, struct ieee80211_node *ni,
 	cmd.ni = ni;
 	cmd.k = k;
 	bwfm_do_async(sc, bwfm_set_key_cb, &cmd, sizeof(cmd));
-	return 0;
+	sc->sc_key_tasks++;
+	return EBUSY;
 }
 
 void
@@ -2616,9 +2622,12 @@ bwfm_set_key_cb(struct bwfm_softc *sc, void *arg)
 	struct bwfm_cmd_key *cmd = arg;
 	struct ieee80211_key *k = cmd->k;
 	struct ieee80211_node *ni = cmd->ni;
+	struct ieee80211com *ic = &sc->sc_ic;
 	struct bwfm_wsec_key key;
 	uint32_t wsec, wsec_enable;
 	int ext_key = 0;
+
+	sc->sc_key_tasks--;
 
 	if ((k->k_flags & IEEE80211_KEY_GROUP) == 0 &&
 	    k->k_cipher != IEEE80211_CIPHER_WEP40 &&
@@ -2654,13 +2663,23 @@ bwfm_set_key_cb(struct bwfm_softc *sc, void *arg)
 	default:
 		printf("%s: cipher %x not supported\n", DEVNAME(sc),
 		    k->k_cipher);
+		ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
 		return;
 	}
+
+	delay(100);
 
 	bwfm_fwvar_var_set_data(sc, "wsec_key", &key, sizeof(key));
 	bwfm_fwvar_var_get_int(sc, "wsec", &wsec);
 	wsec |= wsec_enable;
 	bwfm_fwvar_var_set_int(sc, "wsec", wsec);
+
+	if (sc->sc_key_tasks == 0) {
+		DPRINTF(("%s: marking port %s valid\n", DEVNAME(sc),
+		    ether_sprintf(cmd->ni->ni_macaddr)));
+		cmd->ni->ni_port_valid = 1;
+		ieee80211_set_link_state(ic, LINK_STATE_UP);
+	}
 }
 
 void

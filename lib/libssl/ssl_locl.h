@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_locl.h,v 1.307 2020/11/11 18:14:12 jsing Exp $ */
+/* $OpenBSD: ssl_locl.h,v 1.320 2021/02/07 15:26:32 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -359,6 +359,7 @@ __BEGIN_HIDDEN_DECLS
 
 typedef struct ssl_method_internal_st {
 	int dtls;
+	int server;
 	int version;
 
 	uint16_t min_version;
@@ -476,18 +477,23 @@ struct tls12_record_layer *tls12_record_layer_new(void);
 void tls12_record_layer_free(struct tls12_record_layer *rl);
 void tls12_record_layer_alert(struct tls12_record_layer *rl,
     uint8_t *alert_desc);
+int tls12_record_layer_write_overhead(struct tls12_record_layer *rl,
+    size_t *overhead);
+int tls12_record_layer_read_protected(struct tls12_record_layer *rl);
+int tls12_record_layer_write_protected(struct tls12_record_layer *rl);
+void tls12_record_layer_set_aead(struct tls12_record_layer *rl,
+    const EVP_AEAD *aead);
 void tls12_record_layer_set_version(struct tls12_record_layer *rl,
     uint16_t version);
-void tls12_record_layer_set_read_epoch(struct tls12_record_layer *rl,
-    uint16_t epoch);
 void tls12_record_layer_set_write_epoch(struct tls12_record_layer *rl,
+    uint16_t epoch);
+int tls12_record_layer_use_write_epoch(struct tls12_record_layer *rl,
+    uint16_t epoch);
+void tls12_record_layer_write_epoch_done(struct tls12_record_layer *rl,
     uint16_t epoch);
 void tls12_record_layer_clear_read_state(struct tls12_record_layer *rl);
 void tls12_record_layer_clear_write_state(struct tls12_record_layer *rl);
-void tls12_record_layer_set_read_seq_num(struct tls12_record_layer *rl,
-    uint8_t *seq_num);
-void tls12_record_layer_set_write_seq_num(struct tls12_record_layer *rl,
-    uint8_t *seq_num);
+void tls12_record_layer_reflect_seq_num(struct tls12_record_layer *rl);
 int tls12_record_layer_set_read_aead(struct tls12_record_layer *rl,
     SSL_AEAD_CTX *aead_ctx);
 int tls12_record_layer_set_write_aead(struct tls12_record_layer *rl,
@@ -498,6 +504,12 @@ int tls12_record_layer_set_write_cipher_hash(struct tls12_record_layer *rl,
     EVP_CIPHER_CTX *cipher_ctx, EVP_MD_CTX *hash_ctx, int stream_mac);
 int tls12_record_layer_set_read_mac_key(struct tls12_record_layer *rl,
     const uint8_t *mac_key, size_t mac_key_len);
+int tls12_record_layer_change_read_cipher_state(struct tls12_record_layer *rl,
+    const uint8_t *mac_key, size_t mac_key_len, const uint8_t *key,
+    size_t key_len, const uint8_t *iv, size_t iv_len);
+int tls12_record_layer_change_write_cipher_state(struct tls12_record_layer *rl,
+    const uint8_t *mac_key, size_t mac_key_len, const uint8_t *key,
+    size_t key_len, const uint8_t *iv, size_t iv_len);
 int tls12_record_layer_open_record(struct tls12_record_layer *rl,
     uint8_t *buf, size_t buf_len, uint8_t **out, size_t *out_len);
 int tls12_record_layer_seal_record(struct tls12_record_layer *rl,
@@ -748,14 +760,6 @@ typedef struct ssl_internal_st {
 
 	STACK_OF(SSL_CIPHER) *cipher_list_tls13;
 
-	SSL_AEAD_CTX *aead_read_ctx;	/* AEAD context. If non-NULL, then
-					   enc_read_ctx and read_hash are
-					   ignored. */
-
-	SSL_AEAD_CTX *aead_write_ctx;	/* AEAD context. If non-NULL, then
-					   enc_write_ctx and write_hash are
-					   ignored. */
-
 	EVP_CIPHER_CTX *enc_write_ctx;		/* cryptographic state */
 	EVP_MD_CTX *write_hash;			/* used for mac generation */
 
@@ -831,11 +835,6 @@ typedef struct ssl3_buffer_internal_st {
 } SSL3_BUFFER_INTERNAL;
 
 typedef struct ssl3_state_internal_st {
-	unsigned char read_sequence[SSL3_SEQUENCE_SIZE];
-	int read_mac_secret_size;
-	unsigned char read_mac_secret[EVP_MAX_MD_SIZE];
-	unsigned char write_sequence[SSL3_SEQUENCE_SIZE];
-
 	SSL3_BUFFER_INTERNAL rbuf;	/* read IO goes into here */
 	SSL3_BUFFER_INTERNAL wbuf;	/* write IO goes into here */
 
@@ -891,14 +890,12 @@ typedef struct ssl3_state_internal_st {
 	struct	{
 		int new_mac_secret_size;
 
-		/* actually only needs to be 16+20 */
-		unsigned char cert_verify_md[EVP_MAX_MD_SIZE*2];
+		unsigned char cert_verify_md[EVP_MAX_MD_SIZE];
 
-		/* actually only need to be 16+20 for SSLv3 and 12 for TLS */
-		unsigned char finish_md[EVP_MAX_MD_SIZE*2];
-		int finish_md_len;
-		unsigned char peer_finish_md[EVP_MAX_MD_SIZE*2];
-		int peer_finish_md_len;
+		unsigned char finish_md[EVP_MAX_MD_SIZE];
+		size_t finish_md_len;
+		unsigned char peer_finish_md[EVP_MAX_MD_SIZE];
+		size_t peer_finish_md_len;
 
 		unsigned long message_size;
 		int message_type;
@@ -980,9 +977,6 @@ typedef struct dtls1_state_internal_st {
 	unsigned short next_handshake_write_seq;
 
 	unsigned short handshake_read_seq;
-
-	/* save last sequence number for retransmissions */
-	unsigned char last_write_sequence[SSL3_SEQUENCE_SIZE];
 
 	/* Received handshake records (processed and unprocessed) */
 	record_pqueue unprocessed_rcds;
@@ -1121,6 +1115,7 @@ int ssl_version_set_min(const SSL_METHOD *meth, uint16_t ver, uint16_t max_ver,
 int ssl_version_set_max(const SSL_METHOD *meth, uint16_t ver, uint16_t min_ver,
     uint16_t *out_ver);
 int ssl_downgrade_max_version(SSL *s, uint16_t *max_ver);
+int ssl_legacy_stack_version(SSL *s, uint16_t version);
 int ssl_cipher_in_list(STACK_OF(SSL_CIPHER) *ciphers, const SSL_CIPHER *cipher);
 int ssl_cipher_allowed_in_version_range(const SSL_CIPHER *cipher,
     uint16_t min_ver, uint16_t max_ver);
@@ -1267,8 +1262,6 @@ int dtls1_get_message_header(unsigned char *data,
     struct hm_header_st *msg_hdr);
 void dtls1_get_ccs_header(unsigned char *data, struct ccs_header_st *ccs_hdr);
 void dtls1_reset_seq_numbers(SSL *s, int rw);
-void dtls1_build_sequence_number(unsigned char *dst, unsigned char *seq,
-    unsigned short epoch);
 struct timeval* dtls1_get_timeout(SSL *s, struct timeval* timeleft);
 int dtls1_check_timeout_num(SSL *s);
 int dtls1_handle_timeout(SSL *s);
@@ -1389,8 +1382,6 @@ int ssl_check_serverhello_tlsext(SSL *s);
 #define TLS1_TICKET_DECRYPTED		 3
 
 int tls1_process_ticket(SSL *s, CBS *ext_block, int *alert, SSL_SESSION **ret);
-
-long ssl_get_algorithm2(SSL *s);
 
 int tls1_check_ec_server_key(SSL *s);
 

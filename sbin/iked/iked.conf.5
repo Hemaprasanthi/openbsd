@@ -1,4 +1,4 @@
-.\" $OpenBSD: iked.conf.5,v 1.79 2020/11/15 22:39:36 tobhe Exp $
+.\" $OpenBSD: iked.conf.5,v 1.83 2021/01/24 19:10:19 tobhe Exp $
 .\"
 .\" Copyright (c) 2010 - 2014 Reyk Floeter <reyk@openbsd.org>
 .\" Copyright (c) 2004 Mathieu Sauve-Frankel  All rights reserved.
@@ -15,7 +15,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: November 15 2020 $
+.Dd $Mdocdate: January 24 2021 $
 .Dt IKED.CONF 5
 .Os
 .Sh NAME
@@ -193,7 +193,7 @@ have to be placed in
 .Pp
 The optional
 .Ic tolerate
-parameter specifies how much the OCSP reponse attribute
+parameter specifies how much the OCSP response attribute
 .Sq thisUpdate
 may be in the future and how much
 .Sq nextUpdate
@@ -389,9 +389,6 @@ Each traffic selector will apply for packets with source address
 .Ar src
 and destination address
 .Ar dst .
-The keyword
-.Ar any
-will match any address (i.e. 0.0.0.0/0).
 If the
 .Ar src
 argument specifies a fictional source ID,
@@ -399,6 +396,9 @@ the
 .Ar srcnat
 parameter can be used to specify the actual source address.
 This can be used in outgoing NAT/BINAT scenarios as described below.
+The keyword
+.Ar any
+will match any address (i.e. 0.0.0.0/0 and ::/0).
 If the
 .Ic config address
 option is specified, the
@@ -879,8 +879,8 @@ keyword:
 .It Li hmac-md5 Ta "128 bits" Ta "96 bits" Ta ""
 .It Li hmac-sha1 Ta "160 bits" Ta "96 bits" Ta "x"
 .It Li hmac-sha2-256 Ta "256 bits" Ta "128 bits" Ta "x"
-.It Li hmac-sha2-384 Ta "384 bits" Ta "192 bits" Ta ""
-.It Li hmac-sha2-512 Ta "512 bits" Ta "256 bits" Ta ""
+.It Li hmac-sha2-384 Ta "384 bits" Ta "192 bits" Ta "x"
+.It Li hmac-sha2-512 Ta "512 bits" Ta "256 bits" Ta "x"
 .El
 .Pp
 The following pseudo-random function types are permitted with the
@@ -891,8 +891,8 @@ keyword:
 .It Li hmac-md5 Ta "128 bits" Ta "" Ta "[IKE only]"
 .It Li hmac-sha1 Ta "160 bits" Ta "x" Ta "[IKE only]"
 .It Li hmac-sha2-256 Ta "256 bits" Ta "x" Ta "[IKE only]"
-.It Li hmac-sha2-384 Ta "384 bits" Ta "" Ta "[IKE only]"
-.It Li hmac-sha2-512 Ta "512 bits" Ta "" Ta "[IKE only]"
+.It Li hmac-sha2-384 Ta "384 bits" Ta "x" Ta "[IKE only]"
+.It Li hmac-sha2-512 Ta "512 bits" Ta "x" Ta "[IKE only]"
 .El
 .Pp
 The following cipher types are permitted with the

@@ -1,4 +1,4 @@
-/* $OpenBSD: tls13_client.c,v 1.67 2020/09/11 17:36:27 jsing Exp $ */
+/* $OpenBSD: tls13_client.c,v 1.70 2021/01/06 20:15:35 tb Exp $ */
 /*
  * Copyright (c) 2018, 2019 Joel Sing <jsing@openbsd.org>
  *
@@ -756,6 +756,7 @@ tls13_server_finished_recv(struct tls13_ctx *ctx, CBS *cbs)
 	uint8_t key[EVP_MAX_MD_SIZE];
 	HMAC_CTX *hmac_ctx = NULL;
 	unsigned int hlen;
+	SSL *s = ctx->ssl;
 	int ret = 0;
 
 	/*
@@ -789,6 +790,11 @@ tls13_server_finished_recv(struct tls13_ctx *ctx, CBS *cbs)
 		ctx->alert = TLS13_ALERT_DECRYPT_ERROR;
 		goto err;
 	}
+
+	if (!CBS_write_bytes(cbs, S3I(s)->tmp.peer_finish_md,
+	    sizeof(S3I(s)->tmp.peer_finish_md),
+	    &S3I(s)->tmp.peer_finish_md_len))
+		goto err;
 
 	if (!CBS_skip(cbs, verify_data_len))
 		goto err;
@@ -1028,18 +1034,19 @@ tls13_client_finished_send(struct tls13_ctx *ctx, CBB *cbb)
 {
 	struct tls13_secrets *secrets = ctx->hs->secrets;
 	struct tls13_secret context = { .data = "", .len = 0 };
-	struct tls13_secret finished_key;
+	struct tls13_secret finished_key = { .data = NULL, .len = 0 };
 	uint8_t transcript_hash[EVP_MAX_MD_SIZE];
 	size_t transcript_hash_len;
-	uint8_t key[EVP_MAX_MD_SIZE];
 	uint8_t *verify_data;
-	size_t hmac_len;
+	size_t verify_data_len;
 	unsigned int hlen;
 	HMAC_CTX *hmac_ctx = NULL;
+	CBS cbs;
+	SSL *s = ctx->ssl;
 	int ret = 0;
 
-	finished_key.data = key;
-	finished_key.len = EVP_MD_size(ctx->hash);
+	if (!tls13_secret_init(&finished_key, EVP_MD_size(ctx->hash)))
+		goto err;
 
 	if (!tls13_hkdf_expand_label(&finished_key, ctx->hash,
 	    &secrets->client_handshake_traffic, "finished",
@@ -1058,17 +1065,23 @@ tls13_client_finished_send(struct tls13_ctx *ctx, CBB *cbb)
 	if (!HMAC_Update(hmac_ctx, transcript_hash, transcript_hash_len))
 		goto err;
 
-	hmac_len = HMAC_size(hmac_ctx);
-	if (!CBB_add_space(cbb, &verify_data, hmac_len))
+	verify_data_len = HMAC_size(hmac_ctx);
+	if (!CBB_add_space(cbb, &verify_data, verify_data_len))
 		goto err;
 	if (!HMAC_Final(hmac_ctx, verify_data, &hlen))
 		goto err;
-	if (hlen != hmac_len)
+	if (hlen != verify_data_len)
+		goto err;
+
+	CBS_init(&cbs, verify_data, verify_data_len);
+	if (!CBS_write_bytes(&cbs, S3I(s)->tmp.finish_md,
+	    sizeof(S3I(s)->tmp.finish_md), &S3I(s)->tmp.finish_md_len))
 		goto err;
 
 	ret = 1;
 
  err:
+	tls13_secret_cleanup(&finished_key);
 	HMAC_CTX_free(hmac_ctx);
 
 	return ret;

@@ -1,4 +1,4 @@
-# $OpenBSD: RAMDISK,v 1.135 2020/11/17 14:32:34 patrick Exp $
+# $OpenBSD: RAMDISK,v 1.139 2021/02/11 23:54:40 patrick Exp $
 #
 # GENERIC machine description file
 #
@@ -110,11 +110,15 @@ vioscsi*	at virtio?
 simplefb*	at fdt?
 wsdisplay*	at simplefb?
 
+# Apple
+exuart*		at fdt?
+
 # iMX
 imxccm*		at fdt? early 1
 imxiomuxc*	at fdt? early 1
 imxanatop*	at fdt? early 1
 imxsrc*		at fdt? early 1
+imxdwusb*	at fdt?
 imxehci*	at fdt?
 usb*		at imxehci?
 imxgpc*		at fdt?
@@ -187,6 +191,7 @@ mvppc*		at fdt?
 mvpp*		at mvppc?
 mvrng*		at fdt?
 mvrtc*		at fdt?
+mvsw*		at fdt?
 mvuart*		at fdt?
 sfp*		at fdt?
 
@@ -236,6 +241,7 @@ re*		at pci?			# Realtek 8169/8169S/8110S
 rge*		at pci?			# Realtek 8125
 
 # PCI WiFi
+athn*		at pci?			# Atheros AR9k (802.11a/g/n)
 bwfm*		at pci?			# Broadcom FullMAC
 
 # PCI SCSI

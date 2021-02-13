@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sig.c,v 1.264 2020/11/08 20:37:24 mpi Exp $	*/
+/*	$OpenBSD: kern_sig.c,v 1.272 2021/02/08 10:51:01 mpi Exp $	*/
 /*	$NetBSD: kern_sig.c,v 1.54 1996/04/22 01:38:32 christos Exp $	*/
 
 /*
@@ -523,7 +523,7 @@ sys_sigsuspend(struct proc *p, void *v, register_t *retval)
 	struct sigacts *ps = pr->ps_sigacts;
 
 	dosigsuspend(p, SCARG(uap, mask) &~ sigcantmask);
-	while (tsleep_nsec(ps, PPAUSE|PCATCH, "pause", INFSLP) == 0)
+	while (tsleep_nsec(ps, PPAUSE|PCATCH, "sigsusp", INFSLP) == 0)
 		/* void */;
 	/* always return EINTR rather than ERESTART... */
 	return (EINTR);
@@ -1854,7 +1854,7 @@ filt_sigattach(struct knote *kn)
 	kn->kn_flags |= EV_CLEAR;		/* automatically set */
 
 	s = splhigh();
-	klist_insert(&pr->ps_klist, kn);
+	klist_insert_locked(&pr->ps_klist, kn);
 	splx(s);
 
 	return (0);
@@ -1867,7 +1867,7 @@ filt_sigdetach(struct knote *kn)
 	int s;
 
 	s = splhigh();
-	klist_remove(&pr->ps_klist, kn);
+	klist_remove_locked(&pr->ps_klist, kn);
 	splx(s);
 }
 
@@ -1941,14 +1941,14 @@ userret(struct proc *p)
 }
 
 int
-single_thread_check(struct proc *p, int deep)
+single_thread_check_locked(struct proc *p, int deep, int s)
 {
 	struct process *pr = p->p_p;
 
+	SCHED_ASSERT_LOCKED();
+
 	if (pr->ps_single != NULL && pr->ps_single != p) {
 		do {
-			int s;
-
 			/* if we're in deep, we need to unwind to the edge */
 			if (deep) {
 				if (pr->ps_flags & PS_SINGLEUNWIND)
@@ -1957,14 +1957,12 @@ single_thread_check(struct proc *p, int deep)
 					return (EINTR);
 			}
 
-			SCHED_LOCK(s);
-			if (pr->ps_single == NULL) {
-				SCHED_UNLOCK(s);
+			if (pr->ps_single == NULL)
 				continue;
-			}
 
 			if (atomic_dec_int_nv(&pr->ps_singlecount) == 0)
 				wakeup(&pr->ps_singlecount);
+
 			if (pr->ps_flags & PS_SINGLEEXIT) {
 				SCHED_UNLOCK(s);
 				KERNEL_LOCK();
@@ -1975,11 +1973,22 @@ single_thread_check(struct proc *p, int deep)
 			/* not exiting and don't need to unwind, so suspend */
 			p->p_stat = SSTOP;
 			mi_switch();
-			SCHED_UNLOCK(s);
 		} while (pr->ps_single != NULL);
 	}
 
 	return (0);
+}
+
+int
+single_thread_check(struct proc *p, int deep)
+{
+	int s, error;
+
+	SCHED_LOCK(s);
+	error = single_thread_check_locked(p, deep, s);
+	SCHED_UNLOCK(s);
+
+	return error;
 }
 
 /*
@@ -2003,8 +2012,12 @@ single_thread_set(struct proc *p, enum single_thread_mode mode, int deep)
 	KERNEL_ASSERT_LOCKED();
 	KASSERT(curproc == p);
 
-	if ((error = single_thread_check(p, deep)))
+	SCHED_LOCK(s);
+	error = single_thread_check_locked(p, deep, s);
+	if (error) {
+		SCHED_UNLOCK(s);
 		return error;
+	}
 
 	switch (mode) {
 	case SINGLE_SUSPEND:
@@ -2022,7 +2035,6 @@ single_thread_set(struct proc *p, enum single_thread_mode mode, int deep)
 		panic("single_thread_mode = %d", mode);
 #endif
 	}
-	SCHED_LOCK(s);
 	pr->ps_singlecount = 0;
 	membar_producer();
 	pr->ps_single = p;
@@ -2094,7 +2106,7 @@ single_thread_wait(struct process *pr, int recheck)
 	/* wait until they're all suspended */
 	wait = pr->ps_singlecount > 0;
 	while (wait) {
-		sleep_setup(&sls, &pr->ps_singlecount, PWAIT, "suspend");
+		sleep_setup(&sls, &pr->ps_singlecount, PWAIT, "suspend", 0);
 		wait = pr->ps_singlecount > 0;
 		sleep_finish(&sls, wait);
 		if (!recheck)

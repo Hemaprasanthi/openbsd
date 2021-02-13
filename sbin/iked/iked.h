@@ -1,4 +1,4 @@
-/*	$OpenBSD: iked.h,v 1.175 2020/11/26 22:24:06 tobhe Exp $	*/
+/*	$OpenBSD: iked.h,v 1.184 2021/02/04 20:38:26 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -99,7 +99,7 @@ struct ctl_conn {
 TAILQ_HEAD(ctl_connlist, ctl_conn);
 extern  struct ctl_connlist ctl_conns;
 
-enum privsep_procid privsep_process;
+extern enum privsep_procid privsep_process;
 
 /*
  * Runtime structures
@@ -180,7 +180,6 @@ struct iked_childsa {
 	uint8_t				 csa_persistent;/* do not rekey */
 	uint8_t				 csa_esn;	/* use ESN */
 	uint8_t				 csa_transport;	/* transport mode */
-	uint8_t				 csa_acquired;	/* no rekey for me */
 
 	struct iked_spi			 csa_spi;
 
@@ -335,6 +334,7 @@ struct iked_dsa {
 	void		*dsa_key;	/* parsed public or private key */
 	int		 dsa_hmac;	/* HMAC or public/private key */
 	int		 dsa_sign;	/* Sign or verify operation */
+	uint32_t	 dsa_flags;	/* State flags */
 };
 
 struct iked_id {
@@ -369,7 +369,7 @@ struct iked_kex {
 	struct ibuf			*kex_inonce;	/* Ni */
 	struct ibuf			*kex_rnonce;	/* Nr */
 
-	struct group			*kex_dhgroup;	/* DH group */
+	struct dh_group			*kex_dhgroup;	/* DH group */
 	struct ibuf			*kex_dhiexchange;
 	struct ibuf			*kex_dhrexchange;
 	struct ibuf			*kex_dhpeer;	/* pointer to i or r */
@@ -480,7 +480,7 @@ struct iked_sa {
 	struct iked_sa			*sa_previ;	/* matching back pointer */
 	struct iked_sa			*sa_nextr;	/* simultaneous rekey */
 	struct iked_sa			*sa_prevr;	/* matching back pointer */
-	uint64_t			 sa_rekeyspi;	/* peerspi CSA rekey*/
+	uint64_t			 sa_rekeyspi;	/* peerspi CSA rekey */
 	struct ibuf			*sa_simult;	/* simultaneous rekey */
 
 	struct iked_ipcomp		 sa_ipcompi;	/* IPcomp initator */
@@ -716,6 +716,7 @@ struct iked_static {
 	uint8_t			 st_frag;	/* fragmentation */
 	uint8_t			 st_mobike;	/* MOBIKE */
 	in_port_t		 st_nattport;
+	int			 st_stickyaddress; /* addr per DSTID  */
 };
 
 struct iked {
@@ -733,6 +734,7 @@ struct iked {
 #define sc_frag			sc_static.st_frag
 #define sc_mobike		sc_static.st_mobike
 #define sc_nattport		sc_static.st_nattport
+#define sc_stickyaddress	sc_static.st_stickyaddress
 
 	struct iked_policies		 sc_policies;
 	struct iked_policy		*sc_defaultcon;
@@ -799,6 +801,8 @@ uint64_t
 	 config_getspi(void);
 struct iked_transform *
 	 config_findtransform(struct iked_proposals *, uint8_t, unsigned int);
+struct iked_transform *
+	 config_findtransform_ext(struct iked_proposals *, uint8_t,int, unsigned int);
 void	 config_free_policy(struct iked *, struct iked_policy *);
 struct iked_proposal *
 	 config_add_proposal(struct iked_proposals *, unsigned int,
@@ -844,7 +848,8 @@ int	 config_getcertpartialchain(struct iked *, struct imsg *);
 /* policy.c */
 void	 policy_init(struct iked *);
 int	 policy_lookup(struct iked *, struct iked_message *,
-	    struct iked_proposals *proposals);
+	    struct iked_proposals *, struct iked_flows *, int);
+int	 policy_lookup_sa(struct iked *, struct iked_sa *);
 struct iked_policy *
 	 policy_test(struct iked *, struct iked_policy *);
 int	 policy_generate_ts(struct iked_policy *);
@@ -917,11 +922,11 @@ size_t	 cipher_ivlength(struct iked_cipher *);
 size_t	 cipher_outlength(struct iked_cipher *, size_t);
 
 struct iked_dsa *
-	 dsa_new(uint16_t, struct iked_hash *, int);
+	 dsa_new(uint8_t, struct iked_hash *, int);
 struct iked_dsa *
-	 dsa_sign_new(uint16_t, struct iked_hash *);
+	 dsa_sign_new(uint8_t, struct iked_hash *);
 struct iked_dsa *
-	 dsa_verify_new(uint16_t, struct iked_hash *);
+	 dsa_verify_new(uint8_t, struct iked_hash *);
 struct ibuf *
 	 dsa_setkey(struct iked_dsa *, void *, size_t, uint8_t);
 void	 dsa_free(struct iked_dsa *);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: init_main.c,v 1.301 2020/09/13 09:42:31 claudio Exp $	*/
+/*	$OpenBSD: init_main.c,v 1.306 2021/02/08 10:51:01 mpi Exp $	*/
 /*	$NetBSD: init_main.c,v 1.84.4.1 1996/06/02 09:08:06 mrg Exp $	*/
 
 /*
@@ -114,7 +114,7 @@ extern void stoeplitz_init(void);
 const char	copyright[] =
 "Copyright (c) 1982, 1986, 1989, 1991, 1993\n"
 "\tThe Regents of the University of California.  All rights reserved.\n"
-"Copyright (c) 1995-2020 OpenBSD. All rights reserved.  https://www.OpenBSD.org\n";
+"Copyright (c) 1995-2021 OpenBSD. All rights reserved.  https://www.OpenBSD.org\n";
 
 /* Components of the first process -- never freed. */
 struct	session session0;
@@ -232,6 +232,7 @@ main(void *framep)
 	KERNEL_LOCK_INIT();
 	SCHED_LOCK_INIT();
 
+	rw_obj_init();
 	uvm_init();
 	disk_init();		/* must come before autoconfiguration */
 	tty_init();		/* initialise tty's */
@@ -432,6 +433,7 @@ main(void *framep)
 #endif
 
 	mbcpuinit();	/* enable per cpu mbuf data */
+	uvm_init_percpu();
 
 	/* init exec and emul */
 	init_exec();

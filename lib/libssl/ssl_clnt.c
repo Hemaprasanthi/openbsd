@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_clnt.c,v 1.76 2020/10/14 16:57:33 jsing Exp $ */
+/* $OpenBSD: ssl_clnt.c,v 1.78 2021/02/07 15:26:32 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -212,18 +212,10 @@ ssl3_connect(SSL *s)
 			if (cb != NULL)
 				cb(s, SSL_CB_HANDSHAKE_START, 1);
 
-			if (SSL_is_dtls(s)) {
-				if ((s->version & 0xff00) != (DTLS1_VERSION & 0xff00)) {
-					SSLerror(s, ERR_R_INTERNAL_ERROR);
-					ret = -1;
-					goto end;
-				}
-			} else {
-				if ((s->version & 0xff00) != 0x0300) {
-					SSLerror(s, ERR_R_INTERNAL_ERROR);
-					ret = -1;
-					goto end;
-				}
+			if (!ssl_legacy_stack_version(s, s->version)) {
+				SSLerror(s, ERR_R_INTERNAL_ERROR);
+				ret = -1;
+				goto end;
 			}
 
 			/* s->version=SSL3_VERSION; */
@@ -2246,7 +2238,8 @@ ssl3_send_client_kex_gost(SSL *s, SESS_CERT *sess_cert, CBB *cbb)
 		goto err;
 	}
 
-	if (ssl_get_algorithm2(s) & SSL_HANDSHAKE_MAC_GOST94)
+	/* XXX check handshake hash instead. */
+	if (S3I(s)->hs.new_cipher->algorithm2 & SSL_HANDSHAKE_MAC_GOST94)
 		nid = NID_id_GostR3411_94;
 	else
 		nid = NID_id_tc26_gost3411_2012_256;

@@ -1,4 +1,4 @@
-/* $OpenBSD: ssh-keygen.c,v 1.425 2020/11/27 10:12:30 dtucker Exp $ */
+/* $OpenBSD: ssh-keygen.c,v 1.427 2020/12/20 23:36:51 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1994 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -55,6 +55,7 @@
 #include "sshsig.h"
 #include "ssh-sk.h"
 #include "sk-api.h" /* XXX for SSH_SK_USER_PRESENCE_REQD; remove */
+#include "cipher.h"
 
 #ifdef ENABLE_PKCS11
 #include "ssh-pkcs11.h"
@@ -1317,7 +1318,7 @@ do_known_hosts(struct passwd *pw, const char *name, int find_host,
 	foreach_options |= print_fingerprint ? HKF_WANT_PARSE_KEY : 0;
 	if ((r = hostkeys_foreach(identity_file, (find_host || !hash_hosts) ?
 	    known_hosts_find_delete : known_hosts_hash, &ctx, name, NULL,
-	    foreach_options)) != 0) {
+	    foreach_options, 0)) != 0) {
 		if (inplace)
 			unlink(tmp);
 		fatal_fr(r, "hostkeys_foreach");

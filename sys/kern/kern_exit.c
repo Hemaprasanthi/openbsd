@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_exit.c,v 1.191 2020/11/16 18:37:06 jsing Exp $	*/
+/*	$OpenBSD: kern_exit.c,v 1.195 2021/02/08 10:51:01 mpi Exp $	*/
 /*	$NetBSD: kern_exit.c,v 1.39 1996/04/22 01:38:25 christos Exp $	*/
 
 /*
@@ -183,6 +183,8 @@ exit1(struct proc *p, int xexit, int xsig, int flags)
 	p->p_siglist = 0;
 	if ((p->p_flag & P_THREAD) == 0)
 		pr->ps_siglist = 0;
+
+	kqpoll_exit();
 
 #if NKCOV > 0
 	kcov_exit(p);
@@ -691,6 +693,7 @@ process_reparent(struct process *child, struct process *parent)
 	}
 
 	child->ps_pptr = parent;
+	child->ps_ppid = parent->ps_pid;
 }
 
 void

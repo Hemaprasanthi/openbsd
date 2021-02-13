@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_tpmr.c,v 1.20 2020/08/21 22:59:27 kn Exp $ */
+/*	$OpenBSD: if_tpmr.c,v 1.22 2021/01/19 07:31:05 mvs Exp $ */
 
 /*
  * Copyright (c) 2019 The University of Queensland
@@ -362,7 +362,7 @@ tpmr_input(struct ifnet *ifp0, struct mbuf *m, void *brport)
 			;
 		else
 #endif
-		if ((*ifpn->if_enqueue)(ifpn, m))
+		if (if_enqueue(ifpn, m))
 			counters_inc(ifp->if_counters, ifc_oerrors);
 		else {
 			counters_pkt(ifp->if_counters,
@@ -466,24 +466,20 @@ tpmr_add_port(struct tpmr_softc *sc, const struct ifbreq *req)
 	if (sc->sc_nports >= nitems(sc->sc_ports))
 		return (ENOSPC);
 
-	ifp0 = ifunit(req->ifbr_ifsname);
+	ifp0 = if_unit(req->ifbr_ifsname);
 	if (ifp0 == NULL)
 		return (EINVAL);
 
-	if (ifp0->if_type != IFT_ETHER)
-		return (EPROTONOSUPPORT);
+	if (ifp0->if_type != IFT_ETHER) {
+		error = EPROTONOSUPPORT;
+		goto put;
+	}
 
 	error = ether_brport_isset(ifp0);
 	if (error != 0)
-		return (error);
+		goto put;
 
 	/* let's try */
-
-	ifp0 = if_get(ifp0->if_index); /* get an actual reference */
-	if (ifp0 == NULL) {
-		/* XXX this should never happen */
-		return (EINVAL);
-	}
 
 	p = malloc(sizeof(*p), M_DEVBUF, M_WAITOK|M_ZERO|M_CANFAIL);
 	if (p == NULL) {

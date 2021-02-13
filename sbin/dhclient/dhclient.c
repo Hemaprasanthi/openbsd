@@ -1,4 +1,4 @@
-/*	$OpenBSD: dhclient.c,v 1.687 2020/11/27 14:52:36 krw Exp $	*/
+/*	$OpenBSD: dhclient.c,v 1.691 2021/02/02 15:46:16 cheloha Exp $	*/
 
 /*
  * Copyright 2004 Henning Brauer <henning@openbsd.org>
@@ -95,7 +95,7 @@
 #include "log.h"
 #include "privsep.h"
 
-char *path_dhclient_conf = _PATH_DHCLIENT_CONF;
+char *path_dhclient_conf;
 char *path_lease_db;
 char *log_procname;
 
@@ -118,8 +118,10 @@ void		 get_name(struct interface_info *, int, char *);
 void		 get_address(struct interface_info *);
 void		 get_ssid(struct interface_info *, int);
 void		 get_sockets(struct interface_info *);
+int		 get_routefd(int);
 void		 set_autoconf(struct interface_info *, int);
 void		 set_iff_up(struct interface_info *, int);
+void		 set_user(char *);
 int		 get_ifa_family(char *, int);
 struct ifaddrs	*get_link_ifa(const char *, struct ifaddrs *);
 void		 interface_state(struct interface_info *);
@@ -413,6 +415,29 @@ set_iff_up(struct interface_info *ifi, int ioctlfd)
 }
 
 void
+set_user(char *user)
+{
+	struct passwd		*pw;
+
+	pw = getpwnam(user);
+	if (pw == NULL)
+		fatalx("no such user: %s", user);
+
+	if (chroot(pw->pw_dir) == -1)
+		fatal("chroot(%s)", pw->pw_dir);
+	if (chdir("/") == -1)
+		fatal("chdir(\"/\")");
+	if (setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid) == -1)
+		fatal("setresgid");
+	if (setgroups(1, &pw->pw_gid) == -1)
+		fatal("setgroups");
+	if (setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid) == -1)
+		fatal("setresuid");
+
+	endpwent();
+}
+
+void
 get_sockets(struct interface_info *ifi)
 {
 	unsigned char		*newp;
@@ -428,6 +453,28 @@ get_sockets(struct interface_info *ifi)
 		ifi->rbuf = newp;
 		ifi->rbuf_max = newsize;
 	}
+}
+
+int
+get_routefd(int rdomain)
+{
+	int		routefd, rtfilter;
+
+	if ((routefd = socket(AF_ROUTE, SOCK_RAW, AF_INET)) == -1)
+		fatal("socket(AF_ROUTE, SOCK_RAW)");
+
+	rtfilter = ROUTE_FILTER(RTM_PROPOSAL) | ROUTE_FILTER(RTM_IFINFO) |
+	    ROUTE_FILTER(RTM_NEWADDR) | ROUTE_FILTER(RTM_DELADDR) |
+	    ROUTE_FILTER(RTM_IFANNOUNCE) | ROUTE_FILTER(RTM_80211INFO);
+
+	if (setsockopt(routefd, AF_ROUTE, ROUTE_MSGFILTER,
+	    &rtfilter, sizeof(rtfilter)) == -1)
+		fatal("setsockopt(ROUTE_MSGFILTER)");
+	if (setsockopt(routefd, AF_ROUTE, ROUTE_TABLEFILTER, &rdomain,
+	    sizeof(rdomain)) == -1)
+		fatal("setsockopt(ROUTE_TABLEFILTER)");
+
+	return routefd;
 }
 
 void
@@ -576,13 +623,13 @@ rtm_dispatch(struct interface_info *ifi, struct rt_msghdr *rtm)
 int
 main(int argc, char *argv[])
 {
+	uint8_t			 actions[DHO_END];
 	struct stat		 sb;
 	struct interface_info	*ifi;
-	struct passwd		*pw;
-	char			*ignore_list = NULL;
+	char			*ignore_list, *p;
 	int			 fd, socket_fd[2];
-	int			 rtfilter, routefd;
-	int			 ch;
+	int			 routefd;
+	int			 ch, i;
 
 	if (isatty(STDERR_FILENO) != 0)
 		log_init(1, LOG_DEBUG); /* log to stderr until daemonized */
@@ -591,22 +638,39 @@ main(int argc, char *argv[])
 
 	log_setverbose(0);	/* Don't show log_debug() messages. */
 
+	if (lstat(_PATH_DHCLIENT_CONF, &sb) == 0)
+		path_dhclient_conf = _PATH_DHCLIENT_CONF;
+	memset(actions, ACTION_USELEASE, sizeof(actions));
+
 	while ((ch = getopt(argc, argv, "c:di:nrv")) != -1)
 		switch (ch) {
 		case 'c':
-			if (optarg == NULL)
-				usage();
-			cmd_opts |= OPT_CONFPATH;
-			path_dhclient_conf = optarg;
+			if (strlen(optarg) == 0)
+				path_dhclient_conf = NULL;
+			else if (lstat(optarg, &sb) == 0)
+				path_dhclient_conf = optarg;
+			else
+				fatal("lstat(%s)", optarg);
 			break;
 		case 'd':
 			cmd_opts |= OPT_FOREGROUND;
 			break;
 		case 'i':
-			if (optarg == NULL)
-				usage();
-			cmd_opts |= OPT_IGNORELIST;
+			if (strlen(optarg) == 0)
+				break;
 			ignore_list = strdup(optarg);
+			if (ignore_list == NULL)
+				fatal("ignore_list");
+			for (p = strsep(&ignore_list, ", "); p != NULL;
+			     p = strsep(&ignore_list, ", ")) {
+				if (*p == '\0')
+					continue;
+				i = name_to_code(p);
+				if (i == DHO_END)
+					fatalx("invalid option name: '%s'", p);
+				actions[i] = ACTION_IGNORE;
+			}
+			free(ignore_list);
 			break;
 		case 'n':
 			cmd_opts |= OPT_NOACTION;
@@ -626,17 +690,6 @@ main(int argc, char *argv[])
 
 	if (argc != 1)
 		usage();
-
-	if ((cmd_opts & OPT_CONFPATH) != 0) {
-		if (lstat(path_dhclient_conf, &sb) == -1) {
-			/*
-			 * Non-existant file is OK. It lets you ignore
-			 * /etc/dhclient.conf for testing.
-			 */
-			if (errno != ENOENT)
-				fatal("lstat(%s)", path_dhclient_conf);
-		}
-	}
 
 	if ((cmd_opts & (OPT_FOREGROUND | OPT_NOACTION)) != 0)
 		cmd_opts |= OPT_VERBOSE;
@@ -679,31 +732,14 @@ main(int argc, char *argv[])
 		fatal("unpriv_ibuf");
 	imsg_init(unpriv_ibuf, socket_fd[1]);
 
-	read_conf(ifi->name, ignore_list, &ifi->hw_address);
-	free(ignore_list);
+	read_conf(ifi->name, actions, &ifi->hw_address);
 	if ((cmd_opts & OPT_NOACTION) != 0)
 		return 0;
-
-	if ((pw = getpwnam("_dhcp")) == NULL)
-		fatalx("no such user: _dhcp");
 
 	if (asprintf(&path_lease_db, "%s.%s", _PATH_LEASE_DB, ifi->name) == -1)
 		fatal("path_lease_db");
 
-	if ((routefd = socket(AF_ROUTE, SOCK_RAW, AF_INET)) == -1)
-		fatal("socket(AF_ROUTE, SOCK_RAW)");
-
-	rtfilter = ROUTE_FILTER(RTM_PROPOSAL) | ROUTE_FILTER(RTM_IFINFO) |
-	    ROUTE_FILTER(RTM_NEWADDR) | ROUTE_FILTER(RTM_DELADDR) |
-	    ROUTE_FILTER(RTM_IFANNOUNCE) | ROUTE_FILTER(RTM_80211INFO);
-
-	if (setsockopt(routefd, AF_ROUTE, ROUTE_MSGFILTER,
-	    &rtfilter, sizeof(rtfilter)) == -1)
-		fatal("setsockopt(ROUTE_MSGFILTER)");
-	if (setsockopt(routefd, AF_ROUTE, ROUTE_TABLEFILTER, &ifi->rdomain,
-	    sizeof(ifi->rdomain)) == -1)
-		fatal("setsockopt(ROUTE_TABLEFILTER)");
-
+	routefd = get_routefd(ifi->rdomain);
 	fd = take_charge(ifi, routefd, path_lease_db);
 	if (fd != -1)
 		read_lease_db(&ifi->lease_db);
@@ -712,19 +748,7 @@ main(int argc, char *argv[])
 		log_warn("%s: fopen(%s)", log_procname, path_lease_db);
 	write_lease_db(&ifi->lease_db);
 
-	if (chroot(pw->pw_dir) == -1)
-		fatal("chroot(%s)", pw->pw_dir);
-	if (chdir("/") == -1)
-		fatal("chdir(\"/\")");
-
-	if (setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid) == -1)
-		fatal("setresgid");
-	if (setgroups(1, &pw->pw_gid) == -1)
-		fatal("setgroups");
-	if (setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid) == -1)
-		fatal("setresuid");
-
-	endpwent();
+	set_user("_dhcp");
 
 	if ((cmd_opts & OPT_FOREGROUND) == 0) {
 		if (pledge("stdio inet dns route proc", NULL) == -1)
@@ -2343,11 +2367,11 @@ fork_privchld(struct interface_info *ifi, int fd, int fd2)
 		pfd[0].fd = priv_ibuf->fd;
 		pfd[0].events = POLLIN;
 
-		nfds = poll(pfd, 1, INFTIM);
+		nfds = ppoll(pfd, 1, NULL, NULL);
 		if (nfds == -1) {
 			if (errno == EINTR)
 				continue;
-			log_warn("%s: poll(priv_ibuf)", log_procname);
+			log_warn("%s: ppoll(priv_ibuf)", log_procname);
 			break;
 		}
 		if ((pfd[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
@@ -2507,18 +2531,17 @@ cleanup:
 int
 take_charge(struct interface_info *ifi, int routefd, char *leasespath)
 {
+	const struct timespec	 max_timeout = { 9, 0 };
+	const struct timespec	 resend_intvl = { 3, 0 };
+	const struct timespec	 leasefile_intvl = { 0, 3000000 };
+	struct timespec		 now, resend, stop, timeout;
 	struct pollfd		 fds[1];
 	struct rt_msghdr	 rtm;
-	time_t			 cur_time, sent_time, start_time;
 	int			 fd, nfds;
 
-#define	MAXSECONDS		9
-#define	SENTSECONDS		3
-#define	POLLMILLISECONDS	3
-
-	if (time(&start_time) == -1)
-		fatal("time");
-	sent_time = start_time;
+	clock_gettime(CLOCK_REALTIME, &now);
+	resend = now;
+	timespecadd(&now, &max_timeout, &stop);
 
 	/*
 	 * Send RTM_PROPOSAL with RTF_PROTO3 set.
@@ -2537,32 +2560,35 @@ take_charge(struct interface_info *ifi, int routefd, char *leasespath)
 	rtm.rtm_addrs = 0;
 	rtm.rtm_flags = RTF_UP | RTF_PROTO3;
 
-	rtm.rtm_seq = ifi->xid = arc4random();
-	if (write(routefd, &rtm, sizeof(rtm)) == -1)
-		fatal("write(routefd)");
-
 	for (fd = -1; fd == -1 && quit != TERMINATE;) {
-		if (time(&cur_time) == -1)
-			fatal("time");
-		if (cur_time - start_time >= MAXSECONDS)
+		clock_gettime(CLOCK_REALTIME, &now);
+		if (timespeccmp(&now, &stop, >=))
 			fatalx("failed to take charge");
 
 		if ((ifi->flags & IFI_IN_CHARGE) == 0) {
-			if ((cur_time - sent_time) >= SENTSECONDS) {
-				sent_time = cur_time;
+			if (timespeccmp(&now, &resend, >=)) {
+				timespecadd(&resend, &resend_intvl, &resend);
 				rtm.rtm_seq = ifi->xid = arc4random();
 				if (write(routefd, &rtm, sizeof(rtm)) == -1)
 					fatal("write(routefd)");
 			}
+			timespecsub(&resend, &now, &timeout);
+		} else {
+			/*
+			 * Keep trying to open leasefile in 3ms intervals
+			 * while continuing to process any RTM_* messages
+			 * that come in.
+			 */
+			 timeout = leasefile_intvl;
 		}
 
 		fds[0].fd = routefd;
 		fds[0].events = POLLIN;
-		nfds = poll(fds, 1, POLLMILLISECONDS);
+		nfds = ppoll(fds, 1, &timeout, NULL);
 		if (nfds == -1) {
 			if (errno == EINTR)
 				continue;
-			fatal("poll(routefd)");
+			fatal("ppoll(routefd)");
 		}
 
 		if ((fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
@@ -2777,13 +2803,14 @@ release_lease(struct interface_info *ifi)
 void
 propose_release(struct interface_info *ifi)
 {
+	const struct timespec	 max_timeout = { 3, 0 };
+	struct timespec		 now, stop, timeout;
 	struct pollfd		 fds[1];
 	struct rt_msghdr	 rtm;
-	time_t			 start_time, cur_time;
 	int			 nfds, routefd, rtfilter;
 
-	if (time(&start_time) == -1)
-		fatal("time");
+	clock_gettime(CLOCK_REALTIME, &now);
+	timespecadd(&now, &max_timeout, &stop);
 
 	if ((routefd = socket(AF_ROUTE, SOCK_RAW, AF_INET)) == -1)
 		fatal("socket(AF_ROUTE, SOCK_RAW)");
@@ -2814,17 +2841,17 @@ propose_release(struct interface_info *ifi)
 	log_debug("%s: sent RTM_PROPOSAL to release lease", log_procname);
 
 	while (quit == 0) {
-		if (time(&cur_time) == -1)
-			fatal("time");
-		if ((cur_time - start_time) > 3)
+		clock_gettime(CLOCK_REALTIME, &now);
+		if (timespeccmp(&now, &stop, >=))
 			break;
+		timespecsub(&stop, &now, &timeout);
 		fds[0].fd = routefd;
 		fds[0].events = POLLIN;
-		nfds = poll(fds, 1, 3);
+		nfds = ppoll(fds, 1, &timeout, NULL);
 		if (nfds == -1) {
 			if (errno == EINTR)
 				continue;
-			fatal("poll(routefd)");
+			fatal("ppoll(routefd)");
 		}
 		if ((fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
 			fatalx("routefd: ERR|HUP|NVAL");

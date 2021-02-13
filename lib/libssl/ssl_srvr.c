@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_srvr.c,v 1.88 2020/10/14 16:57:33 jsing Exp $ */
+/* $OpenBSD: ssl_srvr.c,v 1.91 2021/02/07 15:04:10 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -213,19 +213,12 @@ ssl3_accept(SSL *s)
 			if (cb != NULL)
 				cb(s, SSL_CB_HANDSHAKE_START, 1);
 
-			if (SSL_is_dtls(s)) {
-				if ((s->version & 0xff00) != (DTLS1_VERSION & 0xff00)) {
-					SSLerror(s, ERR_R_INTERNAL_ERROR);
-					ret = -1;
-					goto end;
-				}
-			} else {
-				if ((s->version >> 8) != 3) {
-					SSLerror(s, ERR_R_INTERNAL_ERROR);
-					ret = -1;
-					goto end;
-				}
+			if (!ssl_legacy_stack_version(s, s->version)) {
+				SSLerror(s, ERR_R_INTERNAL_ERROR);
+				ret = -1;
+				goto end;
 			}
+
 			s->internal->type = SSL_ST_ACCEPT;
 
 			if (!ssl3_setup_init_buffer(s)) {
@@ -328,9 +321,8 @@ ssl3_accept(SSL *s)
 				 * stateless while listening.
 				 */
 				if (listen) {
-					memcpy(S3I(s)->write_sequence,
-					    S3I(s)->read_sequence,
-					    sizeof(S3I(s)->write_sequence));
+					tls12_record_layer_reflect_seq_num(
+					    s->internal->rl);
 				}
 
 				/* If we're just listening, stop here */
@@ -853,15 +845,15 @@ ssl3_get_client_hello(SSL *s)
 	if (!ssl_downgrade_max_version(s, &max_version))
 		goto err;
 	if (ssl_max_shared_version(s, client_version, &shared_version) != 1) {
-		SSLerror(s, SSL_R_WRONG_VERSION_NUMBER);
 		if ((s->client_version >> 8) == SSL3_VERSION_MAJOR &&
-		    !s->internal->enc_write_ctx && !s->internal->write_hash) {
+		    !tls12_record_layer_write_protected(s->internal->rl)) {
 			/*
 			 * Similar to ssl3_get_record, send alert using remote
 			 * version number.
 			 */
 			s->version = s->client_version;
 		}
+		SSLerror(s, SSL_R_WRONG_VERSION_NUMBER);
 		al = SSL_AD_PROTOCOL_VERSION;
 		goto f_err;
 	}

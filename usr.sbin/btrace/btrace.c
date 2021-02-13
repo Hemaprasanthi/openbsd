@@ -1,4 +1,4 @@
-/*	$OpenBSD: btrace.c,v 1.25 2020/09/14 18:45:19 jasper Exp $ */
+/*	$OpenBSD: btrace.c,v 1.29 2021/02/08 09:46:45 mpi Exp $ */
 
 /*
  * Copyright (c) 2019 - 2020 Martin Pieuchot <mpi@openbsd.org>
@@ -29,6 +29,7 @@
 #include <locale.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -86,6 +87,7 @@ void			 stmt_delete(struct bt_stmt *, struct dt_evt *);
 void			 stmt_insert(struct bt_stmt *, struct dt_evt *);
 void			 stmt_print(struct bt_stmt *, struct dt_evt *);
 void			 stmt_store(struct bt_stmt *, struct dt_evt *);
+bool			 stmt_test(struct bt_stmt *, struct dt_evt *);
 void			 stmt_time(struct bt_stmt *, struct dt_evt *);
 void			 stmt_zero(struct bt_stmt *);
 struct bt_arg		*ba_read(struct bt_arg *);
@@ -102,7 +104,6 @@ void			 debug(const char *, ...);
 void			 debugx(const char *, ...);
 const char		*debug_rule_name(struct bt_rule *);
 void			 debug_dump_filter(struct bt_rule *);
-void			 debug_dump_rule(struct bt_rule *);
 
 struct dtioc_probe_info	*dt_dtpis;	/* array of available probes */
 size_t			 dt_ndtpi;	/* # of elements in the array */
@@ -373,12 +374,11 @@ rules_do(int fd, int tracepid)
 }
 
 static inline enum dt_operand
-dop2dt(enum bt_operand op)
+dop2dt(enum bt_argtype op)
 {
 	switch (op) {
-	case B_OP_EQ:	return DT_OP_EQ;
-	case B_OP_NE:	return DT_OP_NE;
-	case B_OP_NONE:	return DT_OP_NONE;
+	case B_AT_OP_EQ:	return DT_OP_EQ;
+	case B_AT_OP_NE:	return DT_OP_NE;
 	default:	break;
 	}
 	xabort("unknown operand %d", op);
@@ -409,7 +409,8 @@ rules_setup(int fd, int tracepid)
 	int dokstack = 0, on = 1;
 
 	TAILQ_FOREACH(r, &g_rules, br_next) {
-		debug_dump_rule(r);
+		debug("parsed probe '%s'", debug_rule_name(r));
+		debug_dump_filter(r);
 
 		if (r->br_type != B_RT_PROBE) {
 			if (r->br_type == B_RT_BEGIN)
@@ -431,8 +432,9 @@ rules_setup(int fd, int tracepid)
 
 		r->br_pbn = dtpi->dtpi_pbn;
 		dtrq->dtrq_pbn = dtpi->dtpi_pbn;
-		if (r->br_filter) {
-			struct bt_filter *df = r->br_filter;
+		if (r->br_filter != NULL &&
+		    r->br_filter->bf_condition == NULL) {
+			struct bt_evtfilter *df = &r->br_filter->bf_evtfilter;
 
 			dtrq->dtrq_filter.dtf_operand = dop2dt(df->bf_op);
 			dtrq->dtrq_filter.dtf_variable = dvar2dt(df->bf_var);
@@ -521,6 +523,8 @@ rules_teardown(int fd)
 	if (rend)
 		rule_eval(rend, NULL);
 	else {
+		debug("eval default 'end' rule\n");
+
 		TAILQ_FOREACH(r, &g_rules, br_next)
 			rule_printmaps(r);
 	}
@@ -531,7 +535,13 @@ rule_eval(struct bt_rule *r, struct dt_evt *dtev)
 {
 	struct bt_stmt *bs;
 
-	debug("eval rule '%s'\n", debug_rule_name(r));
+	debug("eval rule '%s'", debug_rule_name(r));
+	debug_dump_filter(r);
+
+	if (r->br_filter != NULL && r->br_filter->bf_condition != NULL) {
+		if (stmt_test(r->br_filter->bf_condition, dtev) == false)
+			return;
+	}
 
 	SLIST_FOREACH(bs, &r->br_action, bs_next) {
 		switch (bs->bs_act) {
@@ -635,18 +645,31 @@ const char *
 builtin_stack(struct dt_evt *dtev, int kernel)
 {
 	struct stacktrace *st = &dtev->dtev_kstack;
-	static char buf[4096];
+	static char buf[4096], *bp;
 	size_t i;
-	int n = 0;
+	int sz;
 
 	if (!kernel || st->st_count == 0)
 		return "";
 
+	buf[0] = '\0';
+	bp = buf;
+	sz = sizeof(buf);
 	for (i = 0; i < st->st_count; i++) {
-		n += kelf_snprintsym(buf + n, sizeof(buf) - 1 - n,
-		    st->st_pc[i]);
+		int l;
+
+		l = kelf_snprintsym(bp, sz - 1, st->st_pc[i]);
+		if (l < 0)
+			break;
+		if (l >= sz - 1) {
+			bp += sz - 1;
+			sz = 1;
+			break;
+		}
+		bp += l;
+		sz -= l;
 	}
-	snprintf(buf + n, sizeof(buf) - 1 - n, "\n");
+	snprintf(bp, sz, "\n");
 
 	return buf;
 }
@@ -656,7 +679,7 @@ builtin_arg(struct dt_evt *dtev, enum bt_argtype dat)
 {
 	static char buf[sizeof("18446744073709551615")]; /* UINT64_MAX */
 
-	snprintf(buf, sizeof(buf) - 1, "%lu",
+	snprintf(buf, sizeof(buf), "%lu",
 	    dtev->dtev_sysargs[dat - B_AT_BI_ARG0]);
 
 	return buf;
@@ -686,7 +709,7 @@ stmt_bucketize(struct bt_stmt *bs, struct dt_evt *dtev)
 		    bv_name(bv), ba2long(bval, dtev));
 		return;
 	}
-	debug("hist=%p '%s' increment bucket=%s\n", bv->bv_value,
+	debug("hist=%p '%s' increment bucket '%s'\n", bv->bv_value,
 	    bv_name(bv), bucket);
 
 	bv->bv_value = (struct bt_arg *)
@@ -789,7 +812,7 @@ stmt_print(struct bt_stmt *bs, struct dt_evt *dtev)
 }
 
 /*
- * Variable store: 	{ var = 3; }
+ * Variable store: 	{ @var = 3; }
  *
  * In this case '3' is represented by `ba', the argument of a STORE
  * action.
@@ -812,7 +835,7 @@ stmt_store(struct bt_stmt *bs, struct dt_evt *dtev)
 	case B_AT_BI_NSECS:
 		bv->bv_value = ba_new(builtin_nsecs(dtev), B_AT_LONG);
 		break;
-	case B_AT_OP_ADD ... B_AT_OP_OR:
+	case B_AT_OP_PLUS ... B_AT_OP_LOR:
 		bv->bv_value = ba_new(ba2long(ba, dtev), B_AT_LONG);
 		break;
 	default:
@@ -820,6 +843,27 @@ stmt_store(struct bt_stmt *bs, struct dt_evt *dtev)
 	}
 
 	debug("bv=%p var '%s' store (%p) \n", bv, bv_name(bv), bv->bv_value);
+}
+
+/*
+ * Expression test:	{ if (expr) stmt; }
+ */
+bool
+stmt_test(struct bt_stmt *bs, struct dt_evt *dtev)
+{
+	struct bt_arg *ba;
+	long val;
+
+	if (bs == NULL)
+		return true;
+
+	assert(bs->bs_var == NULL);
+	ba = SLIST_FIRST(&bs->bs_args);
+	val = ba2long(ba, dtev);
+
+	debug("ba=%p test (%ld != 0)\n", ba, val);
+
+	return val != 0;
 }
 
 /*
@@ -879,6 +923,7 @@ ba2hash(struct bt_arg *ba, struct dt_evt *dtev)
 	char *hash;
 	int l, len;
 
+	buf[0] = '\0';
 	l = snprintf(buf, sizeof(buf), "%s", ba2str(ba, dtev));
 	if (l < 0 || (size_t)l > sizeof(buf)) {
 		warn("string too long %d > %lu", l, sizeof(buf));
@@ -948,6 +993,7 @@ ba2bucket(struct bt_arg *ba, struct bt_arg *brange, struct dt_evt *dtev,
 		*pstep = step;
 	}
 
+	buf[0] = '\0';
 	l = snprintf(buf, sizeof(buf), "%lu", bucket);
 	if (l < 0 || (size_t)l > sizeof(buf)) {
 		warn("string too long %d > %lu", l, sizeof(buf));
@@ -980,7 +1026,7 @@ baexpr2long(struct bt_arg *ba, struct dt_evt *dtev)
 	second = ba2long(b, dtev);
 
 	switch (ba->ba_type) {
-	case B_AT_OP_ADD:
+	case B_AT_OP_PLUS:
 		result = first + second;
 		break;
 	case B_AT_OP_MINUS:
@@ -992,21 +1038,79 @@ baexpr2long(struct bt_arg *ba, struct dt_evt *dtev)
 	case B_AT_OP_DIVIDE:
 		result = first / second;
 		break;
-	case B_AT_OP_AND:
+	case B_AT_OP_BAND:
 		result = first & second;
 		break;
-	case B_AT_OP_OR:
+	case B_AT_OP_BOR:
 		result = first | second;
+		break;
+	case B_AT_OP_EQ:
+		result = (first == second);
+		break;
+	case B_AT_OP_NE:
+		result = (first != second);
+		break;
+	case B_AT_OP_LE:
+		result = (first <= second);
+		break;
+	case B_AT_OP_GE:
+		result = (first >= second);
+		break;
+	case B_AT_OP_LAND:
+		result = (first && second);
+		break;
+	case B_AT_OP_LOR:
+		result = (first || second);
 		break;
 	default:
 		xabort("unsuported operation %d", ba->ba_type);
 	}
 
-	debug("ba=%p (%ld op %ld) = %ld\n", ba, first, second, result);
+	debug("ba=%p '%ld %s %ld = %ld'\n", ba, first, ba_name(ba), second,
+	   result);
 
 	--recursions;
 
 	return result;
+}
+
+const char *
+ba_name(struct bt_arg *ba)
+{
+	switch (ba->ba_type) {
+	case B_AT_BI_PID:
+		return "pid";
+	case B_AT_BI_TID:
+		return "tid";
+	case B_AT_OP_PLUS:
+		return "+";
+	case B_AT_OP_MINUS:
+		return "-";
+	case B_AT_OP_MULT:
+		return "*";
+	case B_AT_OP_DIVIDE:
+		return "/";
+	case B_AT_OP_BAND:
+		return "&";
+	case B_AT_OP_BOR:
+		return "|";
+	case B_AT_OP_EQ:
+		return "==";
+	case B_AT_OP_NE:
+		return "!=";
+	case B_AT_OP_LE:
+		return "<=";
+	case B_AT_OP_GE:
+		return ">=";
+	case B_AT_OP_LAND:
+		return "&&";
+	case B_AT_OP_LOR:
+		return "||";
+	default:
+		break;
+	}
+
+	return ba2str(ba, NULL);
 }
 
 /*
@@ -1015,6 +1119,7 @@ baexpr2long(struct bt_arg *ba, struct dt_evt *dtev)
 long
 ba2long(struct bt_arg *ba, struct dt_evt *dtev)
 {
+	struct bt_var *bv;
 	long val;
 
 	switch (ba->ba_type) {
@@ -1025,13 +1130,21 @@ ba2long(struct bt_arg *ba, struct dt_evt *dtev)
 		ba = ba_read(ba);
 		val = (long)ba->ba_value;
 		break;
+	case B_AT_MAP:
+		bv = ba->ba_value;
+		/* Unitialized map */
+		if (bv->bv_value == NULL)
+			return 0;
+		val = ba2long(map_get((struct map *)bv->bv_value,
+		    ba2str(ba->ba_key, dtev)), dtev);
+		break;
 	case B_AT_BI_NSECS:
 		val = builtin_nsecs(dtev);
 		break;
 	case B_AT_BI_RETVAL:
 		val = dtev->dtev_sysretval[0];
 		break;
-	case B_AT_OP_ADD ... B_AT_OP_OR:
+	case B_AT_OP_PLUS ... B_AT_OP_LOR:
 		val = baexpr2long(ba, dtev);
 		break;
 	default:
@@ -1051,12 +1164,13 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 	struct bt_var *bv;
 	const char *str;
 
+	buf[0] = '\0';
 	switch (ba->ba_type) {
 	case B_AT_STR:
 		str = (const char *)ba->ba_value;
 		break;
 	case B_AT_LONG:
-		snprintf(buf, sizeof(buf) - 1, "%ld",(long)ba->ba_value);
+		snprintf(buf, sizeof(buf), "%ld",(long)ba->ba_value);
 		str = buf;
 		break;
 	case B_AT_BI_KSTACK:
@@ -1069,26 +1183,26 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 		str = dtev->dtev_comm;
 		break;
 	case B_AT_BI_CPU:
-		snprintf(buf, sizeof(buf) - 1, "%u", dtev->dtev_cpu);
+		snprintf(buf, sizeof(buf), "%u", dtev->dtev_cpu);
 		str = buf;
 		break;
 	case B_AT_BI_PID:
-		snprintf(buf, sizeof(buf) - 1, "%d", dtev->dtev_pid);
+		snprintf(buf, sizeof(buf), "%d", dtev->dtev_pid);
 		str = buf;
 		break;
 	case B_AT_BI_TID:
-		snprintf(buf, sizeof(buf) - 1, "%d", dtev->dtev_tid);
+		snprintf(buf, sizeof(buf), "%d", dtev->dtev_tid);
 		str = buf;
 		break;
 	case B_AT_BI_NSECS:
-		snprintf(buf, sizeof(buf) - 1, "%llu", builtin_nsecs(dtev));
+		snprintf(buf, sizeof(buf), "%llu", builtin_nsecs(dtev));
 		str = buf;
 		break;
 	case B_AT_BI_ARG0 ... B_AT_BI_ARG9:
 		str = builtin_arg(dtev, ba->ba_type);
 		break;
 	case B_AT_BI_RETVAL:
-		snprintf(buf, sizeof(buf) - 1, "%ld", (long)dtev->dtev_sysretval[0]);
+		snprintf(buf, sizeof(buf), "%ld", (long)dtev->dtev_sysretval[0]);
 		str = buf;
 		break;
 	case B_AT_MAP:
@@ -1099,8 +1213,8 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 	case B_AT_VAR:
 		str = ba2str(ba_read(ba), dtev);
 		break;
-	case B_AT_OP_ADD ... B_AT_OP_OR:
-		snprintf(buf, sizeof(buf) - 1, "%ld", ba2long(ba, dtev));
+	case B_AT_OP_PLUS ... B_AT_OP_LOR:
+		snprintf(buf, sizeof(buf), "%ld", ba2long(ba, dtev));
 		str = buf;
 		break;
 	case B_AT_MF_COUNT:
@@ -1158,7 +1272,7 @@ ba2dtflags(struct bt_arg *ba)
 		case B_AT_MF_MAX:
 		case B_AT_MF_MIN:
 		case B_AT_MF_SUM:
-		case B_AT_OP_ADD ... B_AT_OP_OR:
+		case B_AT_OP_PLUS ... B_AT_OP_LOR:
 			break;
 		default:
 			xabort("invalid argument type %d", ba->ba_type);
@@ -1219,7 +1333,7 @@ debugx(const char *fmt, ...)
 }
 
 static inline const char *
-debug_getfiltervar(struct bt_filter *df)
+debug_getfiltervar(struct bt_evtfilter *df)
 {
 	switch (df->bf_var) {
 	case B_FV_PID:	return "pid";
@@ -1228,17 +1342,14 @@ debug_getfiltervar(struct bt_filter *df)
 	default:
 		xabort("invalid filtervar %d", df->bf_var);
 	}
-
-
 }
 
 static inline const char *
-debug_getfilterop(struct bt_filter *df)
+debug_getfilterop(struct bt_evtfilter *df)
 {
 	switch (df->bf_op) {
-	case B_OP_EQ:	return "==";
-	case B_OP_NE:	return "!=";
-	case B_OP_NONE:	return "";
+	case B_AT_OP_EQ:	return "==";
+	case B_AT_OP_NE:	return "!=";
 	default:
 		xabort("invalid operand %d", df->bf_op);
 	}
@@ -1247,9 +1358,21 @@ debug_getfilterop(struct bt_filter *df)
 void
 debug_dump_filter(struct bt_rule *r)
 {
-	if (r->br_filter) {
-		debugx(" / %s %s %u /", debug_getfiltervar(r->br_filter),
-		    debug_getfilterop(r->br_filter), r->br_filter->bf_val);
+	if (r->br_filter != NULL) {
+		struct bt_stmt *bs = r->br_filter->bf_condition;
+
+		if (bs == NULL) {
+			struct bt_evtfilter *df = &r->br_filter->bf_evtfilter;
+
+			debugx(" / %s %s %u /", debug_getfiltervar(df),
+			    debug_getfilterop(df), df->bf_val);
+		} else {
+			struct bt_arg *ba = SLIST_FIRST(&bs->bs_args);
+			struct bt_var *bv = ba->ba_value;
+
+			debugx(" / %s[%s] != 0 /.", bv_name(bv),
+			    ba_name(ba->ba_key));
+		}
 	}
 	debugx("\n");
 }
@@ -1269,19 +1392,12 @@ debug_rule_name(struct bt_rule *r)
 	assert(r->br_type == B_RT_PROBE);
 
 	if (r->br_probe->bp_rate) {
-		snprintf(buf, sizeof(buf) - 1, "%s:%s:%u", bp->bp_prov,
+		snprintf(buf, sizeof(buf), "%s:%s:%u", bp->bp_prov,
 		    bp->bp_unit, bp->bp_rate);
 	} else {
-		snprintf(buf, sizeof(buf) - 1, "%s:%s:%s", bp->bp_prov,
+		snprintf(buf, sizeof(buf), "%s:%s:%s", bp->bp_prov,
 		    bp->bp_unit, bp->bp_name);
 	}
 
 	return buf;
-}
-
-void
-debug_dump_rule(struct bt_rule *r)
-{
-	debug("parsed probe '%s'", debug_rule_name(r));
-	debug_dump_filter(r);
 }

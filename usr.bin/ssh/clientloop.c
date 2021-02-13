@@ -1,4 +1,4 @@
-/* $OpenBSD: clientloop.c,v 1.355 2020/10/29 02:47:23 djm Exp $ */
+/* $OpenBSD: clientloop.c,v 1.358 2021/01/27 10:05:28 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -1016,7 +1016,7 @@ process_escapes(struct ssh *ssh, Channel *c,
 				continue;
 
 			case 'R':
-				if (datafellows & SSH_BUG_NOREKEY)
+				if (ssh->compat & SSH_BUG_NOREKEY)
 					logit("Server does not "
 					    "support re-keying");
 				else
@@ -1970,7 +1970,7 @@ check_old_keys_othernames(struct hostkeys_update_ctx *ctx)
 		    ctx->ip_str ? ctx->ip_str : "(none)");
 		if ((r = hostkeys_foreach(options.user_hostfiles[i],
 		    hostkeys_check_old, ctx, ctx->host_str, ctx->ip_str,
-		    HKF_WANT_PARSE_KEY)) != 0) {
+		    HKF_WANT_PARSE_KEY, 0)) != 0) {
 			if (r == SSH_ERR_SYSTEM_ERROR && errno == ENOENT) {
 				debug_f("hostkeys file %s does not exist",
 				    options.user_hostfiles[i]);
@@ -2111,9 +2111,6 @@ client_global_hostkeys_private_confirm(struct ssh *ssh, int type,
 
 	if ((signdata = sshbuf_new()) == NULL)
 		fatal_f("sshbuf_new failed");
-	/* Don't want to accidentally accept an unbound signature */
-	if (ssh->kex->session_id_len == 0)
-		fatal_f("ssh->kex->session_id_len == 0");
 	/*
 	 * Expect a signature for each of the ctx->nnew private keys we
 	 * haven't seen before. They will be in the same order as the
@@ -2126,8 +2123,8 @@ client_global_hostkeys_private_confirm(struct ssh *ssh, int type,
 		sshbuf_reset(signdata);
 		if ( (r = sshbuf_put_cstring(signdata,
 		    "hostkeys-prove-00@openssh.com")) != 0 ||
-		    (r = sshbuf_put_string(signdata, ssh->kex->session_id,
-		    ssh->kex->session_id_len)) != 0 ||
+		    (r = sshbuf_put_stringb(signdata,
+		    ssh->kex->session_id)) != 0 ||
 		    (r = sshkey_puts(ctx->keys[i], signdata)) != 0)
 			fatal_fr(r, "compose signdata");
 		/* Extract and verify signature */
@@ -2284,7 +2281,7 @@ client_input_hostkeys(struct ssh *ssh)
 		    ctx->ip_str ? ctx->ip_str : "(none)");
 		if ((r = hostkeys_foreach(options.user_hostfiles[i],
 		    hostkeys_find, ctx, ctx->host_str, ctx->ip_str,
-		    HKF_WANT_PARSE_KEY)) != 0) {
+		    HKF_WANT_PARSE_KEY, 0)) != 0) {
 			if (r == SSH_ERR_SYSTEM_ERROR && errno == ENOENT) {
 				debug_f("hostkeys file %s does not exist",
 				    options.user_hostfiles[i]);

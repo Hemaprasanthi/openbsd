@@ -1,4 +1,4 @@
-/* $OpenBSD: ssl_lib.c,v 1.238 2020/11/16 18:55:15 jsing Exp $ */
+/* $OpenBSD: ssl_lib.c,v 1.245 2021/02/08 17:20:47 jsing Exp $ */
 /* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
  * All rights reserved.
  *
@@ -345,7 +345,7 @@ SSL_new(SSL_CTX *ctx)
 		goto err;
 
 	s->references = 1;
-	s->server = 0;
+	s->server = ctx->method->internal->server;
 
 	SSL_clear(s);
 
@@ -460,13 +460,19 @@ SSL_set1_host(SSL *s, const char *hostname)
 {
 	struct in_addr ina;
 	struct in6_addr in6a;
-	
+
 	if (hostname != NULL && *hostname != '\0' &&
 	    (inet_pton(AF_INET, hostname, &ina) == 1 ||
 	    inet_pton(AF_INET6, hostname, &in6a) == 1))
 		return X509_VERIFY_PARAM_set1_ip_asc(s->param, hostname);
 	else
 		return X509_VERIFY_PARAM_set1_host(s->param, hostname, 0);
+}
+
+void
+SSL_set_hostflags(SSL *s, unsigned int flags)
+{
+	X509_VERIFY_PARAM_set_hostflags(s->param, flags);
 }
 
 const char *
@@ -1362,8 +1368,6 @@ ssl_has_ecc_ciphers(SSL *s)
 	SSL_CIPHER *cipher;
 	int i;
 
-	if (s->version == DTLS1_VERSION)
-		return 0;
 	if ((ciphers = SSL_get_ciphers(s)) == NULL)
 		return 0;
 
@@ -1484,22 +1488,30 @@ SSL_set_ciphersuites(SSL *s, const char *str)
 char *
 SSL_get_shared_ciphers(const SSL *s, char *buf, int len)
 {
-	STACK_OF(SSL_CIPHER) *ciphers;
+	STACK_OF(SSL_CIPHER) *client_ciphers, *server_ciphers;
 	const SSL_CIPHER *cipher;
 	size_t curlen = 0;
 	char *end;
 	int i;
 
-	if (s->session == NULL || s->session->ciphers == NULL || len < 2)
-		return (NULL);
+	if (!s->server || s->session == NULL || len < 2)
+		return NULL;
 
-	ciphers = s->session->ciphers;
-	if (sk_SSL_CIPHER_num(ciphers) == 0)
-		return (NULL);
+	if ((client_ciphers = s->session->ciphers) == NULL)
+		return NULL;
+	if ((server_ciphers = SSL_get_ciphers(s)) == NULL)
+		return NULL;
+	if (sk_SSL_CIPHER_num(client_ciphers) == 0 ||
+	    sk_SSL_CIPHER_num(server_ciphers) == 0)
+		return NULL;
 
 	buf[0] = '\0';
-	for (i = 0; i < sk_SSL_CIPHER_num(ciphers); i++) {
-		cipher = sk_SSL_CIPHER_value(ciphers, i);
+	for (i = 0; i < sk_SSL_CIPHER_num(client_ciphers); i++) {
+		cipher = sk_SSL_CIPHER_value(client_ciphers, i);
+
+		if (sk_SSL_CIPHER_find(server_ciphers, cipher) < 0)
+			continue;
+
 		end = buf + curlen;
 		if (strlcat(buf, cipher->name, len) >= len ||
 		    (curlen = strlcat(buf, ":", len)) >= len) {
@@ -1511,7 +1523,7 @@ SSL_get_shared_ciphers(const SSL *s, char *buf, int len)
 	/* remove trailing colon */
 	if ((end = strrchr(buf, ':')) != NULL)
 		*end = '\0';
-	return (buf);
+	return buf;
 }
 
 /*
@@ -2604,14 +2616,6 @@ ssl_clear_cipher_read_state(SSL *s)
 	s->read_hash = NULL;
 
 	tls12_record_layer_clear_read_state(s->internal->rl);
-	tls12_record_layer_set_read_seq_num(s->internal->rl,
-	    S3I(s)->read_sequence);
-
-	if (s->internal->aead_read_ctx != NULL) {
-		EVP_AEAD_CTX_cleanup(&s->internal->aead_read_ctx->ctx);
-		free(s->internal->aead_read_ctx);
-		s->internal->aead_read_ctx = NULL;
-	}
 }
 
 void
@@ -2623,14 +2627,6 @@ ssl_clear_cipher_write_state(SSL *s)
 	s->internal->write_hash = NULL;
 
 	tls12_record_layer_clear_write_state(s->internal->rl);
-	tls12_record_layer_set_write_seq_num(s->internal->rl,
-	    S3I(s)->write_sequence);
-
-	if (s->internal->aead_write_ctx != NULL) {
-		EVP_AEAD_CTX_cleanup(&s->internal->aead_write_ctx->ctx);
-		free(s->internal->aead_write_ctx);
-		s->internal->aead_write_ctx = NULL;
-	}
 }
 
 /* Fix this function so that it takes an optional type parameter */

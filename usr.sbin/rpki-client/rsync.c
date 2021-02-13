@@ -1,4 +1,4 @@
-/*	$OpenBSD: rsync.c,v 1.10 2020/11/24 17:54:57 job Exp $ */
+/*	$OpenBSD: rsync.c,v 1.16 2021/02/03 09:29:22 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -15,6 +15,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <sys/queue.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <netinet/in.h>
@@ -28,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <imsg.h>
 
 #include "extern.h"
 
@@ -162,8 +164,6 @@ proc_child(int signal)
  * does so.
  * It then responds with the identifier of the repo that it updated.
  * It only exits cleanly when fd is closed.
- * FIXME: this should use buffered output to prevent deadlocks, but it's
- * very unlikely that we're going to fill our buffer, so whatever.
  * FIXME: limit the number of simultaneous process.
  * Currently, an attacker can trivially specify thousands of different
  * repositories and saturate our system.
@@ -173,19 +173,22 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 {
 	size_t			 id, i, idsz = 0;
 	ssize_t			 ssz;
-	char			*host = NULL, *mod = NULL, *uri = NULL,
-				*dst = NULL, *path, *save, *cmd;
+	char			*uri = NULL, *dst = NULL, *path, *save, *cmd;
 	const char		*pp;
 	pid_t			 pid;
 	char			*args[32];
 	int			 st, rc = 0;
 	struct stat		 stt;
 	struct pollfd		 pfd;
+	struct msgbuf		 msgq;
+	struct ibuf		*b;
 	sigset_t		 mask, oldmask;
 	struct rsyncproc	*ids = NULL;
 
 	pfd.fd = fd;
-	pfd.events = POLLIN;
+
+	msgbuf_init(&msgq);
+	msgq.fd = fd;
 
 	/*
 	 * Unveil the command we want to run.
@@ -224,6 +227,9 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 	if (unveil(NULL, NULL) == -1)
 		err(1, "unveil");
 
+	if (pledge("stdio cpath proc exec", NULL) == -1)
+		err(1, "pledge");
+
 	/* Initialise retriever for children exiting. */
 
 	if (sigemptyset(&mask) == -1)
@@ -236,6 +242,10 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 		err(1, NULL);
 
 	for (;;) {
+		pfd.events = POLLIN;
+		if (msgq.queued)
+			pfd.events |= POLLOUT;
+
 		if (ppoll(&pfd, 1, NULL, &oldmask) == -1) {
 			if (errno != EINTR)
 				err(1, "ppoll");
@@ -265,8 +275,13 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 					ok = 0;
 				}
 
-				io_simple_write(fd, &ids[i].id, sizeof(size_t));
-				io_simple_write(fd, &ok, sizeof(ok));
+				b = ibuf_open(sizeof(size_t) + sizeof(ok));
+				if (b == NULL)
+					err(1, NULL);
+				io_simple_buffer(b, &ids[i].id, sizeof(size_t));
+				io_simple_buffer(b, &ok, sizeof(ok));
+				ibuf_close(&msgq, b);
+
 				free(ids[i].uri);
 				ids[i].uri = NULL;
 				ids[i].pid = 0;
@@ -276,6 +291,18 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 				err(1, "waitpid");
 			continue;
 		}
+
+		if (pfd.revents & POLLOUT) {
+			switch (msgbuf_write(&msgq)) {
+			case 0:
+				errx(1, "write: connection closed");
+			case -1:
+				err(1, "write");
+			}
+		}
+
+		if (!(pfd.revents & POLLIN))
+			continue;
 
 		/*
 		 * Read til the parent exits.
@@ -289,8 +316,10 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 
 		/* Read host and module. */
 
-		io_str_read(fd, &host);
-		io_str_read(fd, &mod);
+		io_str_read(fd, &dst);
+		io_str_read(fd, &uri);
+		assert(dst);
+		assert(uri);
 
 		/*
 		 * Create source and destination locations.
@@ -298,16 +327,8 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 		 * will not build the destination for us.
 		 */
 
-		if (mkdir(host, 0700) == -1 && EEXIST != errno)
-			err(1, "%s", host);
-
-		if (asprintf(&dst, "%s/%s", host, mod) == -1)
-			err(1, NULL);
-		if (mkdir(dst, 0700) == -1 && EEXIST != errno)
+		if (mkpath(dst) == -1)
 			err(1, "%s", dst);
-
-		if (asprintf(&uri, "rsync://%s/%s", host, mod) == -1)
-			err(1, NULL);
 
 		/* Run process itself, wait for exit, check error. */
 
@@ -351,9 +372,7 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 
 		/* Clean up temporary values. */
 
-		free(mod);
 		free(dst);
-		free(host);
 	}
 
 	/* No need for these to be hanging around. */
@@ -363,6 +382,7 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 			free(ids[i].uri);
 		}
 
+	msgbuf_clear(&msgq);
 	free(ids);
 	exit(rc);
 	/* NOTREACHED */

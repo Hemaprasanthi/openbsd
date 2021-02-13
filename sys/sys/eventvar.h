@@ -1,4 +1,4 @@
-/*	$OpenBSD: eventvar.h,v 1.9 2020/04/07 13:27:52 visa Exp $	*/
+/*	$OpenBSD: eventvar.h,v 1.11 2021/01/17 05:56:32 visa Exp $	*/
 
 /*-
  * Copyright (c) 1999,2000 Jonathan Lemon <jlemon@FreeBSD.org>

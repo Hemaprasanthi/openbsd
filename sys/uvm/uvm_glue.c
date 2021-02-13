@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_glue.c,v 1.76 2020/10/19 17:57:43 kettenis Exp $	*/
+/*	$OpenBSD: uvm_glue.c,v 1.78 2021/02/08 10:51:02 mpi Exp $	*/
 /*	$NetBSD: uvm_glue.c,v 1.44 2001/02/06 19:54:44 eeh Exp $	*/
 
 /* 

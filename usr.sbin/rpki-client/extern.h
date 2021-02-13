@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.34 2020/09/12 15:46:48 claudio Exp $ */
+/*	$OpenBSD: extern.h,v 1.42 2021/02/08 09:22:53 claudio Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -17,6 +17,7 @@
 #ifndef EXTERN_H
 #define EXTERN_H
 
+#include <sys/queue.h>
 #include <sys/tree.h>
 #include <sys/time.h>
 
@@ -111,6 +112,7 @@ struct cert {
 	size_t		 ipsz; /* length of "ips" */
 	struct cert_as	*as; /* list of AS numbers and ranges */
 	size_t		 asz; /* length of "asz" */
+	char		*repo; /* CA repository (rsync:// uri) */
 	char		*mft; /* manifest (rsync:// uri) */
 	char		*notify; /* RRDP notify (https:// uri) */
 	char		*crl; /* CRL location (rsync:// or NULL) */
@@ -185,6 +187,15 @@ struct roa {
 };
 
 /*
+ * A single Ghostbuster record
+ */
+struct gbr {
+	char		*vcard;
+	char		*ski; /* SKI */
+	char		*aki; /* AKI */
+};
+
+/*
  * A single VRP element (including ASID)
  */
 struct vrp {
@@ -245,8 +256,25 @@ enum rtype {
 	RTYPE_MFT,
 	RTYPE_ROA,
 	RTYPE_CER,
-	RTYPE_CRL
+	RTYPE_CRL,
+	RTYPE_GBR,
 };
+
+/*
+ * An entity (MFT, ROA, certificate, etc.) that needs to be downloaded
+ * and parsed.
+ */
+struct	entity {
+	enum rtype	 type; /* type of entity (not RTYPE_EOF) */
+	char		*file; /* local path to file */
+	ssize_t		 repo; /* repo index or <0 if w/o repo */
+	int		 has_pkey; /* whether pkey/sz is specified */
+	unsigned char	*pkey; /* public key (optional) */
+	size_t		 pkeysz; /* public key length (optional) */
+	char		*descr; /* tal description */
+	TAILQ_ENTRY(entity) entries;
+};
+TAILQ_HEAD(entityq, entity);
 
 /*
  * Statistics collected during run-time.
@@ -264,6 +292,7 @@ struct	stats {
 	size_t	 roas_invalid; /* invalid resources */
 	size_t	 repos; /* repositories */
 	size_t	 crls; /* revocation lists */
+	size_t	 gbrs; /* ghostbuster records */
 	size_t	 vrps; /* total number of vrps */
 	size_t	 uniqs; /* number of unique vrps */
 	size_t	 del_files; /* number of files removed in cleanup */
@@ -273,38 +302,43 @@ struct	stats {
 	struct timeval	system_time;
 };
 
+struct ibuf;
+
 /* global variables */
 extern int verbose;
 
 /* Routines for RPKI entities. */
 
-void		 tal_buffer(char **, size_t *, size_t *, const struct tal *);
+void		 tal_buffer(struct ibuf *, const struct tal *);
 void		 tal_free(struct tal *);
 struct tal	*tal_parse(const char *, char *);
 char		*tal_read_file(const char *);
 struct tal	*tal_read(int);
 
-void		 cert_buffer(char **, size_t *, size_t *, const struct cert *);
+void		 cert_buffer(struct ibuf *, const struct cert *);
 void		 cert_free(struct cert *);
-struct cert	*cert_parse(X509 **, const char *, const unsigned char *);
+struct cert	*cert_parse(X509 **, const char *);
 struct cert	*ta_parse(X509 **, const char *, const unsigned char *, size_t);
 struct cert	*cert_read(int);
 
-void		 mft_buffer(char **, size_t *, size_t *, const struct mft *);
+void		 mft_buffer(struct ibuf *, const struct mft *);
 void		 mft_free(struct mft *);
 struct mft	*mft_parse(X509 **, const char *);
 int		 mft_check(const char *, struct mft *);
 struct mft	*mft_read(int);
 
-void		 roa_buffer(char **, size_t *, size_t *, const struct roa *);
+void		 roa_buffer(struct ibuf *, const struct roa *);
 void		 roa_free(struct roa *);
-struct roa	*roa_parse(X509 **, const char *, const unsigned char *);
+struct roa	*roa_parse(X509 **, const char *);
 struct roa	*roa_read(int);
 void		 roa_insert_vrps(struct vrp_tree *, struct roa *, size_t *,
 		    size_t *);
 
+void		 gbr_free(struct gbr *);
+struct gbr	*gbr_parse(X509 **, const char *);
+
 /* crl.c */
-X509_CRL	*crl_parse(const char *, const unsigned char *);
+X509_CRL	*crl_parse(const char *);
 void		 free_crl(struct crl *);
 
 /* Validation of our objects. */
@@ -320,7 +354,7 @@ int		 valid_roa(const char *, struct auth_tree *, struct roa *);
 /* Working with CMS files. */
 
 unsigned char	*cms_parse_validate(X509 **, const char *,
-			const char *, const unsigned char *, size_t *);
+			const char *, size_t *);
 
 /* Work with RFC 3779 IP addresses, prefixes, ranges. */
 
@@ -330,9 +364,8 @@ int		 ip_addr_parse(const ASN1_BIT_STRING *,
 			enum afi, const char *, struct ip_addr *);
 void		 ip_addr_print(const struct ip_addr *, enum afi, char *,
 			size_t);
-void		 ip_addr_buffer(char **, size_t *, size_t *,
-			const struct ip_addr *);
-void		 ip_addr_range_buffer(char **, size_t *, size_t *,
+void		 ip_addr_buffer(struct ibuf *, const struct ip_addr *);
+void		 ip_addr_range_buffer(struct ibuf *, 
 			const struct ip_addr_range *);
 void		 ip_addr_read(int, struct ip_addr *);
 void		 ip_addr_range_read(int, struct ip_addr_range *);
@@ -351,6 +384,11 @@ int		 as_check_overlap(const struct cert_as *, const char *,
 			const struct cert_as *, size_t);
 int		 as_check_covered(uint32_t, uint32_t,
 			const struct cert_as *, size_t);
+
+/* Parser-specific */
+void		 entity_free(struct entity *);
+void		 entity_read_req(int fd, struct entity *);
+void		 proc_parser(int) __attribute__((noreturn));
 
 /* Rsync-specific. */
 
@@ -371,17 +409,12 @@ void		 cryptoerrx(const char *, ...)
 
 void		 io_socket_blocking(int);
 void		 io_socket_nonblocking(int);
-void		 io_simple_buffer(char **, size_t *, size_t *, const void *,
-			size_t);
+void		 io_simple_buffer(struct ibuf *, const void *, size_t);
+void		 io_buf_buffer(struct ibuf *, const void *, size_t);
+void		 io_str_buffer(struct ibuf *, const char *);
 void		 io_simple_read(int, void *, size_t);
-void		 io_simple_write(int, const void *, size_t);
-void		 io_buf_buffer(char **, size_t *, size_t *, const void *,
-			size_t);
 void		 io_buf_read_alloc(int, void **, size_t *);
-void		 io_buf_write(int, const void *, size_t);
-void		 io_str_buffer(char **, size_t *, size_t *, const char *);
 void		 io_str_read(int, char **);
-void		 io_str_write(int, const char *);
 
 /* X509 helpers. */
 
@@ -411,6 +444,8 @@ int		 output_json(FILE *, struct vrp_tree *, struct stats *);
 
 void	logx(const char *fmt, ...)
 		    __attribute__((format(printf, 1, 2)));
+
+int	mkpath(const char *);
 
 #define		RPKI_PATH_OUT_DIR	"/var/db/rpki-client"
 #define		RPKI_PATH_BASE_DIR	"/var/cache/rpki-client"
